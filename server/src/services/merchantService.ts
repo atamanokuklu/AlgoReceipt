@@ -225,9 +225,10 @@ export class MerchantService {
       );
     }
 
+    const normalizedTxId = paymentTxId.trim().toUpperCase();
     const authorization = await this.validateAuthorization(session, authorizationJwt);
-    const pendingTransaction = await this.algod.pendingTransactionInformation(paymentTxId).do();
-    const proof = this.extractLivePaymentProof(paymentTxId, pendingTransaction);
+    const pendingTransaction = await this.awaitConfirmedTransaction(normalizedTxId);
+    const proof = this.extractLivePaymentProof(normalizedTxId, pendingTransaction);
 
     if (proof.receiverAddress !== this.treasuryAddress) {
       throw new ApiError(400, 'Transaction receiver does not match the merchant payment address.');
@@ -240,10 +241,10 @@ export class MerchantService {
       );
     }
 
-    this.assertPaymentNotSettled(paymentTxId);
+    this.assertPaymentNotSettled(normalizedTxId);
     const totalUsedUsd = this.ledger.recordSpend(session.agent.did, DEMO_RESOURCE.requestAmountUsd);
     const receipt = await this.issueReceipt(session, authorization, {
-      paymentTxId,
+      paymentTxId: normalizedTxId,
       settlementMode: 'live-algod-verified',
       simulation: false,
       proof: {
@@ -257,7 +258,7 @@ export class MerchantService {
         message: `Verified against algod at ${algodBaseUrl}`
       }
     });
-    this.settledPaymentTxIds.add(paymentTxId);
+    this.settledPaymentTxIds.add(normalizedTxId);
 
     return {
       mode: 'live-algod-verified',
@@ -466,8 +467,16 @@ export class MerchantService {
 
   private extractLivePaymentProof(paymentTxId: string, raw: unknown): PaymentProof {
     const transaction = (raw as { txn?: { txn?: Record<string, unknown> } }).txn?.txn;
-    const confirmedRound = Number((raw as { 'confirmed-round'?: number })['confirmed-round'] ?? 0);
-    const poolError = (raw as { 'pool-error'?: string })['pool-error'];
+    const confirmedRound = Number(
+      (raw as { confirmedRound?: unknown; 'confirmed-round'?: unknown }).confirmedRound ??
+        (raw as { 'confirmed-round'?: unknown })['confirmed-round'] ??
+        0
+    );
+    const poolError = String(
+      (raw as { poolError?: unknown; 'pool-error'?: unknown }).poolError ??
+        (raw as { 'pool-error'?: unknown })['pool-error'] ??
+        ''
+    );
 
     if (poolError) {
       throw new ApiError(400, `Algod reported a pool error for ${paymentTxId}: ${poolError}`);
@@ -485,15 +494,31 @@ export class MerchantService {
       throw new ApiError(400, 'Provided tx id is not yet confirmed on algod.');
     }
 
+    const sender = (transaction as { snd?: unknown; sender?: unknown }).snd ?? (transaction as { sender?: unknown }).sender;
+    const receiver =
+      (transaction as { rcv?: unknown; payment?: { receiver?: unknown } }).rcv ??
+      (transaction as { payment?: { receiver?: unknown } }).payment?.receiver;
+    const amount =
+      (transaction as { amt?: unknown; payment?: { amount?: unknown } }).amt ??
+      (transaction as { payment?: { amount?: unknown } }).payment?.amount ??
+      0;
+    const fee = (transaction as { fee?: unknown }).fee ?? 0;
+    const note = (transaction as { note?: unknown }).note;
+
     return {
       txId: paymentTxId,
-      amountMicroAlgos: Number(transaction.amt ?? 0),
+      amountMicroAlgos: Number(amount ?? 0),
       confirmedRound,
-      roundTime: Number((raw as { 'round-time'?: number })['round-time'] ?? 0) || undefined,
-      senderAddress: transaction.snd ? normalizeAddress(transaction.snd) : undefined,
-      receiverAddress: normalizeAddress(transaction.rcv),
-      feeMicroAlgos: Number(transaction.fee ?? 0) || undefined,
-      note: transaction.note ? normalizeNote(transaction.note) : undefined
+      roundTime:
+        Number(
+          (raw as { roundTime?: unknown; 'round-time'?: unknown }).roundTime ??
+            (raw as { 'round-time'?: unknown })['round-time'] ??
+            0
+        ) || undefined,
+      senderAddress: sender ? normalizeAddress(sender) : undefined,
+      receiverAddress: normalizeAddress(receiver),
+      feeMicroAlgos: Number(fee ?? 0) || undefined,
+      note: note ? normalizeNote(note) : undefined
     };
   }
 
@@ -501,6 +526,37 @@ export class MerchantService {
     if (this.settledPaymentTxIds.has(paymentTxId)) {
       throw new ApiError(409, 'This Algorand payment transaction has already been settled.');
     }
+  }
+
+  private async awaitConfirmedTransaction(paymentTxId: string): Promise<unknown> {
+    const maxAttempts = 20;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const pending = await this.algod.pendingTransactionInformation(paymentTxId).do();
+      const poolError = String(
+        (pending as { poolError?: unknown; 'pool-error'?: unknown }).poolError ??
+          (pending as { 'pool-error'?: unknown })['pool-error'] ??
+          ''
+      );
+      if (poolError.length > 0) {
+        throw new ApiError(400, `Algod reported a pool error for ${paymentTxId}: ${poolError}`);
+      }
+
+      const confirmedRound = Number(
+        (pending as { confirmedRound?: unknown; 'confirmed-round'?: unknown }).confirmedRound ??
+          (pending as { 'confirmed-round'?: unknown })['confirmed-round'] ??
+          0
+      );
+      if (confirmedRound > 0) {
+        return pending;
+      }
+
+      await delay(1000);
+    }
+
+    throw new ApiError(
+      400,
+      'Provided tx id is not yet confirmed on algod. Ensure the tx id is valid and retry in a few seconds.'
+    );
   }
 }
 
@@ -518,6 +574,16 @@ function todayString() {
 }
 
 function normalizeAddress(value: unknown): string {
+  if (typeof value === 'object' && value !== null && 'publicKey' in value) {
+    const publicKey = (value as { publicKey?: unknown }).publicKey;
+    if (publicKey instanceof Uint8Array) {
+      return algosdk.encodeAddress(publicKey);
+    }
+    if (Array.isArray(publicKey)) {
+      return algosdk.encodeAddress(Uint8Array.from(publicKey));
+    }
+  }
+
   if (typeof value === 'string') {
     return value;
   }
@@ -547,6 +613,12 @@ function normalizeNote(value: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export const merchantService = new MerchantService();

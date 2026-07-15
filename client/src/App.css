@@ -326,6 +326,38 @@ input {
   color: #6b8a83;
 }
 
+.receipt-grid-full {
+  display: grid;
+  gap: 8px;
+}
+
+.receipt-field {
+  border: 1px solid #c7ddd5;
+  border-radius: 10px;
+  background: #f7fcfa;
+  padding: 8px 10px;
+}
+
+.receipt-field-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5f7f75;
+  margin-bottom: 4px;
+}
+
+.receipt-field-value {
+  font-size: 13px;
+  color: #0a1614;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.receipt-field-value-code {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
+
 .receipt-stamp {
   border: 2px solid currentColor;
   border-radius: 8px;

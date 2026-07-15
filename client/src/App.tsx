@@ -339,12 +339,13 @@ export default function App() {
     }
 
     await runAction('live-settlement', async () => {
+      const normalizedTxId = paymentTxId.trim().toUpperCase();
       const response = await fetchJson<ReceiptResponse>('/api/merchant/access', {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
           authorizationJwt: authorization.authorizationJwt,
-          paymentTxId: paymentTxId.trim()
+          paymentTxId: normalizedTxId
         })
       });
       setReceipt(response);
@@ -669,12 +670,55 @@ function ReceiptCard({
   agentDid?: string;
   merchantDid?: string;
 }) {
-  const subject = (receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined)
-    ?.vc?.credentialSubject;
+  const subject = (
+    receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined
+  )?.vc?.credentialSubject;
+  const proof =
+    (subject?.proof as
+      | {
+          confirmedRound?: number;
+          roundTime?: number;
+          senderAddress?: string;
+          receiverAddress?: string;
+          feeMicroAlgos?: number;
+          note?: string;
+          verifier?: string;
+          message?: string;
+        }
+      | undefined) ?? {};
+
   const simulation = subject?.simulation === true;
-  const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : '—';
-  const amount = typeof subject?.amountUsd === 'number' ? `$${subject.amountUsd.toFixed(2)}` : '—';
-  const network = typeof subject?.network === 'string' ? subject.network : 'algorand-localnet';
+  const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'N/A';
+  const amountUsd =
+    typeof subject?.amountUsd === 'number' ? `$${subject.amountUsd.toFixed(2)}` : 'N/A';
+  const amountMicroAlgos =
+    typeof subject?.amountMicroAlgos === 'number'
+      ? `${subject.amountMicroAlgos.toLocaleString()} µALGO`
+      : 'N/A';
+  const network = typeof subject?.network === 'string' ? subject.network : 'N/A';
+
+  const details: Array<{ label: string; value: string; code?: boolean }> = [
+    { label: 'Agent DID', value: typeof subject?.id === 'string' ? subject.id : agentDid ?? 'N/A', code: true },
+    { label: 'Controller DID', value: typeof subject?.controllerDid === 'string' ? subject.controllerDid : 'N/A', code: true },
+    { label: 'Merchant DID', value: typeof subject?.merchantDid === 'string' ? subject.merchantDid : merchantDid ?? 'N/A', code: true },
+    { label: 'Merchant payment address', value: typeof subject?.merchantPaymentAddress === 'string' ? subject.merchantPaymentAddress : 'N/A', code: true },
+    { label: 'Resource path', value: typeof subject?.resourcePath === 'string' ? subject.resourcePath : 'N/A', code: true },
+    { label: 'Description', value: typeof subject?.description === 'string' ? subject.description : 'N/A' },
+    { label: 'Settlement mode', value: typeof subject?.settlementMode === 'string' ? subject.settlementMode : 'N/A' },
+    { label: 'Asset', value: typeof subject?.asset === 'string' ? subject.asset : 'N/A' },
+    { label: 'Amount (USD)', value: amountUsd },
+    { label: 'Amount (µALGO)', value: amountMicroAlgos },
+    { label: 'Network', value: network, code: true },
+    { label: 'Transaction ID', value: txId, code: true },
+    { label: 'Confirmed round', value: typeof proof.confirmedRound === 'number' ? String(proof.confirmedRound) : 'N/A' },
+    { label: 'Round time', value: formatUnix(proof.roundTime) },
+    { label: 'Sender address', value: proof.senderAddress ?? 'N/A', code: true },
+    { label: 'Receiver address', value: proof.receiverAddress ?? 'N/A', code: true },
+    { label: 'Fee (µALGO)', value: typeof proof.feeMicroAlgos === 'number' ? String(proof.feeMicroAlgos) : 'N/A' },
+    { label: 'Note', value: proof.note ?? 'N/A', code: true },
+    { label: 'Verifier', value: proof.verifier ?? 'N/A' },
+    { label: 'Verifier message', value: proof.message ?? 'N/A' }
+  ];
 
   return (
     <div className="receipt-card">
@@ -687,12 +731,15 @@ function ReceiptCard({
           {simulation ? 'Simulated' : 'Verified'}
         </div>
       </div>
-      <div className="receipt-grid">
-        <KvRow label="Paid by" value={shorten(agentDid)} />
-        <KvRow label="Paid to" value={shorten(merchantDid)} />
-        <KvRow label="Amount" value={amount} />
-        <KvRow label="Network" value={network} />
-        <KvRow label="Tx id" value={shorten(txId, 18)} />
+      <div className="receipt-grid-full">
+        {details.map((entry) => (
+          <div key={entry.label} className="receipt-field">
+            <div className="receipt-field-label">{entry.label}</div>
+            <div className={entry.code ? 'receipt-field-value receipt-field-value-code' : 'receipt-field-value'}>
+              {entry.value}
+            </div>
+          </div>
+        ))}
       </div>
       <div className="receipt-footer">
         <Check size={14} strokeWidth={3} />
@@ -702,6 +749,14 @@ function ReceiptCard({
       </div>
     </div>
   );
+}
+
+function formatUnix(value: number | undefined): string {
+  if (!value || value <= 0) {
+    return 'N/A';
+  }
+
+  return new Date(value * 1000).toISOString();
 }
 
 function shorten(value: string | undefined, width = 24) {
