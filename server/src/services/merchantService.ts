@@ -1,0 +1,477 @@
+import { randomUUID } from 'node:crypto';
+import type { PaymentRequiredV1 } from '@x402/core/types';
+import algosdk from 'algosdk';
+import { algodBaseUrl, settings } from '../config.js';
+import { ApiError } from '../errors.js';
+import { type DemoSession } from './demoSessions.js';
+import { createDidKeyIdentity, type DemoIdentity } from './didKey.js';
+import { SpendLedger } from './spendLedger.js';
+import {
+  issueCredentialJwt,
+  verifyCredentialJwt,
+  type CredentialJwtPayload,
+  type VerifiedCredential
+} from './vc.js';
+
+const DEMO_RESOURCE = {
+  resourceId: 'market-data-algo-usd',
+  path: '/v1/market-data/ALGO-USD',
+  description: 'ALGO/USD paid market snapshot',
+  requestAmountUsd: 0.05,
+  amountMicroAlgos: 100000,
+  asset: 'ALGO',
+  network: 'algorand:localnet'
+} as const;
+
+export interface SpendAuthorizationClaims {
+  controllerDid: string;
+  merchantDid: string;
+  merchantPaymentAddress: string;
+  resourcePath: string;
+  description: string;
+  dailyCapUsd: number;
+  requestAmountUsd: number;
+  usedTodayUsd: number;
+  remainingDailyCapUsd: number;
+  currency: 'USD';
+  network: string;
+  validOn: string;
+}
+
+export interface ReceiptClaims {
+  controllerDid: string;
+  merchantDid: string;
+  merchantPaymentAddress: string;
+  resourcePath: string;
+  description: string;
+  amountUsd: number;
+  amountMicroAlgos: number;
+  asset: string;
+  network: string;
+  paymentTxId: string;
+  settlementMode: 'live-algod-verified' | 'offline-simulation';
+  simulation: boolean;
+  proof: {
+    confirmedRound?: number;
+    roundTime?: number;
+    senderAddress?: string;
+    receiverAddress: string;
+    feeMicroAlgos?: number;
+    note?: string;
+    verifier: 'algod' | 'demo-simulation';
+    message: string;
+  };
+}
+
+export interface PaymentProof {
+  txId: string;
+  amountMicroAlgos: number;
+  confirmedRound: number;
+  roundTime?: number;
+  senderAddress?: string;
+  receiverAddress: string;
+  feeMicroAlgos?: number;
+  note?: string;
+}
+
+export class MerchantService {
+  private readonly merchantIdentity: DemoIdentity = createDidKeyIdentity();
+  private readonly treasuryAddress = algosdk.generateAccount().addr.toString();
+  private readonly ledger = new SpendLedger();
+  private readonly settledPaymentTxIds = new Set<string>();
+  private readonly algod = new algosdk.Algodv2(
+    settings.ALGOD_TOKEN,
+    settings.ALGOD_SERVER,
+    settings.ALGOD_PORT
+  );
+
+  getOffer() {
+    return {
+      ...DEMO_RESOURCE,
+      merchantDid: this.merchantIdentity.did,
+      merchantPaymentAddress: this.treasuryAddress
+    };
+  }
+
+  getUsedToday(subjectDid: string): number {
+    return this.ledger.getUsedToday(subjectDid);
+  }
+
+  async getStatus() {
+    try {
+      const status = await this.algod.status().do();
+      return {
+        merchantDid: this.merchantIdentity.did,
+        merchantPaymentAddress: this.treasuryAddress,
+        offer: this.getOffer(),
+        algod: {
+          reachable: true,
+          mode: 'live',
+          url: algodBaseUrl,
+          tokenConfigured: settings.ALGOD_TOKEN.length > 0,
+          lastRound: Number(status.lastRound ?? 0)
+        }
+      };
+    } catch (error) {
+      return {
+        merchantDid: this.merchantIdentity.did,
+        merchantPaymentAddress: this.treasuryAddress,
+        offer: this.getOffer(),
+        algod: {
+          reachable: false,
+          mode: 'offline',
+          url: algodBaseUrl,
+          tokenConfigured: settings.ALGOD_TOKEN.length > 0,
+          message: error instanceof Error ? error.message : 'Unable to reach algod'
+        }
+      };
+    }
+  }
+
+  async issueAuthorization(session: DemoSession, dailyCapUsd: number) {
+    const usedTodayUsd = this.ledger.getUsedToday(session.agent.did);
+    this.ledger.assertCanSpend(session.agent.did, DEMO_RESOURCE.requestAmountUsd, dailyCapUsd);
+
+    const remainingDailyCapUsd = roundCurrency(dailyCapUsd - usedTodayUsd);
+    const claims: SpendAuthorizationClaims = {
+      controllerDid: session.controller.did,
+      merchantDid: this.merchantIdentity.did,
+      merchantPaymentAddress: this.treasuryAddress,
+      resourcePath: DEMO_RESOURCE.path,
+      description: DEMO_RESOURCE.description,
+      dailyCapUsd: roundCurrency(dailyCapUsd),
+      requestAmountUsd: DEMO_RESOURCE.requestAmountUsd,
+      usedTodayUsd,
+      remainingDailyCapUsd,
+      currency: 'USD',
+      network: DEMO_RESOURCE.network,
+      validOn: todayString()
+    };
+
+    const jwt = await issueCredentialJwt({
+      issuer: session.controller,
+      subject: session.agent.did,
+      credentialType: 'SpendAuthorizationCredential',
+      credentialSubject: claims
+    });
+
+    const verification = await verifyCredentialJwt<SpendAuthorizationClaims>(jwt);
+
+    return {
+      authorizationJwt: jwt,
+      verification,
+      capStatus: {
+        usedTodayUsd,
+        requestAmountUsd: DEMO_RESOURCE.requestAmountUsd,
+        dailyCapUsd,
+        remainingAfterRequestUsd: roundCurrency(
+          dailyCapUsd - usedTodayUsd - DEMO_RESOURCE.requestAmountUsd
+        )
+      }
+    };
+  }
+
+  async createPaymentRequired(session: DemoSession, authorizationJwt: string) {
+    const authorization = await this.validateAuthorization(session, authorizationJwt);
+
+    return {
+      error: 'payment_required',
+      message: 'Submit a valid Algorand payment transaction id to unlock the resource.',
+      requestId: randomUUID(),
+      note: 'Send a confirmed Algorand payment of the required microAlgo amount to the merchant address, then POST back with paymentTxId set to the confirmed transaction id.',
+      x402: this.buildX402Offer(authorization)
+    };
+  }
+
+  private buildX402Offer(authorization: ValidatedAuthorization): PaymentRequiredV1 {
+    return {
+      x402Version: 1,
+      accepts: [
+        {
+          scheme: 'exact',
+          network: DEMO_RESOURCE.network,
+          maxAmountRequired: String(DEMO_RESOURCE.amountMicroAlgos),
+          resource: DEMO_RESOURCE.path,
+          description: DEMO_RESOURCE.description,
+          mimeType: 'application/json',
+          outputSchema: {},
+          payTo: this.treasuryAddress,
+          maxTimeoutSeconds: 300,
+          asset: DEMO_RESOURCE.asset,
+          extra: {
+            paymentMethod: 'algorand-payment',
+            receiptFormat: 'vc-jwt',
+            settleEndpoint: '/api/merchant/access',
+            merchantDid: this.merchantIdentity.did,
+            authorization: {
+              type: 'SpendAuthorizationCredential',
+              verified: authorization.verification.valid,
+              issuer: authorization.verification.payload.iss,
+              remainingDailyCapUsd: authorization.remainingDailyCapUsd
+            }
+          }
+        }
+      ]
+    };
+  }
+
+  async settleLive(session: DemoSession, authorizationJwt: string, paymentTxId: string) {
+    const status = await this.getStatus();
+    if (!status.algod.reachable) {
+      throw new ApiError(
+        503,
+        'Live settlement is unavailable because algod is unreachable. Use the clearly labeled offline simulation instead.'
+      );
+    }
+
+    const authorization = await this.validateAuthorization(session, authorizationJwt);
+    const pendingTransaction = await this.algod.pendingTransactionInformation(paymentTxId).do();
+    const proof = this.extractLivePaymentProof(paymentTxId, pendingTransaction);
+
+    if (proof.receiverAddress !== this.treasuryAddress) {
+      throw new ApiError(400, 'Transaction receiver does not match the merchant payment address.');
+    }
+
+    if (proof.amountMicroAlgos < DEMO_RESOURCE.amountMicroAlgos) {
+      throw new ApiError(
+        400,
+        `Transaction amount ${proof.amountMicroAlgos} is below the required ${DEMO_RESOURCE.amountMicroAlgos} microAlgos.`
+      );
+    }
+
+    this.assertPaymentNotSettled(paymentTxId);
+    const totalUsedUsd = this.ledger.recordSpend(session.agent.did, DEMO_RESOURCE.requestAmountUsd);
+    const receipt = await this.issueReceipt(session, authorization, {
+      paymentTxId,
+      settlementMode: 'live-algod-verified',
+      simulation: false,
+      proof: {
+        confirmedRound: proof.confirmedRound,
+        roundTime: proof.roundTime,
+        senderAddress: proof.senderAddress,
+        receiverAddress: proof.receiverAddress,
+        feeMicroAlgos: proof.feeMicroAlgos,
+        note: proof.note,
+        verifier: 'algod',
+        message: `Verified against algod at ${algodBaseUrl}`
+      }
+    });
+    this.settledPaymentTxIds.add(paymentTxId);
+
+    return {
+      mode: 'live-algod-verified',
+      totalUsedTodayUsd: totalUsedUsd,
+      livePayment: proof,
+      ...receipt
+    };
+  }
+
+  async simulateSettlement(session: DemoSession, authorizationJwt: string) {
+    const authorization = await this.validateAuthorization(session, authorizationJwt);
+    const simulatedTxId = `SIM-${randomUUID()}`;
+    const totalUsedUsd = this.ledger.recordSpend(session.agent.did, DEMO_RESOURCE.requestAmountUsd);
+    const receipt = await this.issueReceipt(session, authorization, {
+      paymentTxId: simulatedTxId,
+      settlementMode: 'offline-simulation',
+      simulation: true,
+      proof: {
+        receiverAddress: this.treasuryAddress,
+        verifier: 'demo-simulation',
+        message: 'Demo-only receipt. No algod verification or on-chain settlement was performed.'
+      }
+    });
+
+    return {
+      mode: 'offline-simulation',
+      totalUsedTodayUsd: totalUsedUsd,
+      ...receipt
+    };
+  }
+
+  async verifyCredential(jwt: string) {
+    return verifyCredentialJwt<object>(jwt);
+  }
+
+  private async issueReceipt(
+    session: DemoSession,
+    authorization: ValidatedAuthorization,
+    input: {
+      paymentTxId: string;
+      settlementMode: 'live-algod-verified' | 'offline-simulation';
+      simulation: boolean;
+      proof: ReceiptClaims['proof'];
+    }
+  ) {
+    const claims: ReceiptClaims = {
+      controllerDid: session.controller.did,
+      merchantDid: this.merchantIdentity.did,
+      merchantPaymentAddress: this.treasuryAddress,
+      resourcePath: DEMO_RESOURCE.path,
+      description: DEMO_RESOURCE.description,
+      amountUsd: DEMO_RESOURCE.requestAmountUsd,
+      amountMicroAlgos: DEMO_RESOURCE.amountMicroAlgos,
+      asset: DEMO_RESOURCE.asset,
+      network: DEMO_RESOURCE.network,
+      paymentTxId: input.paymentTxId,
+      settlementMode: input.settlementMode,
+      simulation: input.simulation,
+      proof: input.proof
+    };
+
+    const receiptJwt = await issueCredentialJwt({
+      issuer: this.merchantIdentity,
+      subject: session.agent.did,
+      credentialType: 'PaymentReceiptCredential',
+      credentialSubject: claims
+    });
+
+    const verification = await verifyCredentialJwt<ReceiptClaims>(receiptJwt);
+
+    return {
+      authorizationSummary: {
+        issuerDid: authorization.verification.payload.iss,
+        subjectDid: authorization.verification.payload.sub,
+        remainingDailyCapUsd: authorization.remainingDailyCapUsd
+      },
+      receiptJwt,
+      verification
+    };
+  }
+
+  private async validateAuthorization(
+    session: DemoSession,
+    authorizationJwt: string
+  ): Promise<ValidatedAuthorization> {
+    const verification = await verifyCredentialJwt<SpendAuthorizationClaims>(authorizationJwt);
+    const subject = verification.payload.sub;
+    const issuer = verification.payload.iss;
+    const claims = verification.payload.vc?.credentialSubject;
+
+    if (!claims) {
+      throw new ApiError(400, 'Authorization VC is missing a credentialSubject.');
+    }
+
+    if (subject !== session.agent.did) {
+      throw new ApiError(400, 'Authorization subject does not match the active demo agent.');
+    }
+
+    if (issuer !== session.controller.did) {
+      throw new ApiError(400, 'Authorization issuer does not match the session controller DID.');
+    }
+
+    if (claims.merchantDid !== this.merchantIdentity.did) {
+      throw new ApiError(400, 'Authorization was not issued for this merchant DID.');
+    }
+
+    if (claims.merchantPaymentAddress !== this.treasuryAddress) {
+      throw new ApiError(400, 'Authorization merchant payment address does not match this merchant.');
+    }
+
+    if (claims.resourcePath !== DEMO_RESOURCE.path) {
+      throw new ApiError(400, 'Authorization does not match the protected resource path.');
+    }
+
+    if (claims.requestAmountUsd !== DEMO_RESOURCE.requestAmountUsd) {
+      throw new ApiError(400, 'Authorization amount does not match the protected resource price.');
+    }
+
+    if (claims.validOn !== todayString()) {
+      throw new ApiError(400, 'Authorization is not valid for today.');
+    }
+
+    this.ledger.assertCanSpend(session.agent.did, claims.requestAmountUsd, claims.dailyCapUsd);
+
+    return {
+      verification,
+      remainingDailyCapUsd: roundCurrency(
+        claims.dailyCapUsd - this.ledger.getUsedToday(session.agent.did) - claims.requestAmountUsd
+      )
+    };
+  }
+
+  private extractLivePaymentProof(paymentTxId: string, raw: unknown): PaymentProof {
+    const transaction = (raw as { txn?: { txn?: Record<string, unknown> } }).txn?.txn;
+    const confirmedRound = Number((raw as { 'confirmed-round'?: number })['confirmed-round'] ?? 0);
+    const poolError = (raw as { 'pool-error'?: string })['pool-error'];
+
+    if (poolError) {
+      throw new ApiError(400, `Algod reported a pool error for ${paymentTxId}: ${poolError}`);
+    }
+
+    if (!transaction) {
+      throw new ApiError(400, 'Algod did not return transaction details for the provided tx id.');
+    }
+
+    if (String(transaction.type ?? '') !== 'pay') {
+      throw new ApiError(400, 'Provided tx id is not an Algorand payment transaction.');
+    }
+
+    if (confirmedRound < 1) {
+      throw new ApiError(400, 'Provided tx id is not yet confirmed on algod.');
+    }
+
+    return {
+      txId: paymentTxId,
+      amountMicroAlgos: Number(transaction.amt ?? 0),
+      confirmedRound,
+      roundTime: Number((raw as { 'round-time'?: number })['round-time'] ?? 0) || undefined,
+      senderAddress: transaction.snd ? normalizeAddress(transaction.snd) : undefined,
+      receiverAddress: normalizeAddress(transaction.rcv),
+      feeMicroAlgos: Number(transaction.fee ?? 0) || undefined,
+      note: transaction.note ? normalizeNote(transaction.note) : undefined
+    };
+  }
+
+  private assertPaymentNotSettled(paymentTxId: string): void {
+    if (this.settledPaymentTxIds.has(paymentTxId)) {
+      throw new ApiError(409, 'This Algorand payment transaction has already been settled.');
+    }
+  }
+}
+
+interface ValidatedAuthorization {
+  verification: VerifiedCredential<SpendAuthorizationClaims>;
+  remainingDailyCapUsd: number;
+}
+
+function roundCurrency(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function normalizeAddress(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (value instanceof Uint8Array) {
+    return algosdk.encodeAddress(value);
+  }
+
+  if (Array.isArray(value)) {
+    return algosdk.encodeAddress(Uint8Array.from(value));
+  }
+
+  throw new ApiError(400, 'Unable to decode an Algorand address from algod response.');
+}
+
+function normalizeNote(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString('utf8');
+  }
+
+  if (Array.isArray(value)) {
+    return Buffer.from(value).toString('utf8');
+  }
+
+  return undefined;
+}
+
+export const merchantService = new MerchantService();
