@@ -5,6 +5,7 @@ import { algodBaseUrl, settings } from '../config.js';
 import { ApiError } from '../errors.js';
 import { type DemoSession } from './demoSessions.js';
 import { createDidKeyIdentity, type DemoIdentity } from './didKey.js';
+import { getDispenserAccount } from './kmdService.js';
 import { SpendLedger } from './spendLedger.js';
 import {
   issueCredentialJwt,
@@ -290,6 +291,80 @@ export class MerchantService {
 
   async verifyCredential(jwt: string) {
     return verifyCredentialJwt<object>(jwt);
+  }
+
+  // ── Local agent funding & payment ─────────────────────────────────────
+
+  async getAgentBalance(session: DemoSession) {
+    const info = await this.algod.accountInformation(session.agentAlgoAddress).do();
+    const microAlgos = Number(info.amount ?? 0);
+    return {
+      address: session.agentAlgoAddress,
+      balanceMicroAlgos: microAlgos,
+      balanceAlgos: microAlgos / 1_000_000,
+      merchantAddress: this.treasuryAddress,
+      requiredMicroAlgos: DEMO_RESOURCE.amountMicroAlgos
+    };
+  }
+
+  async fundAgent(session: DemoSession) {
+    const status = await this.getStatus();
+    if (!status.algod.reachable) {
+      throw new ApiError(503, 'algod is unreachable — start AlgoKit LocalNet first.');
+    }
+
+    const dispenser = await getDispenserAccount();
+    const suggestedParams = await this.algod.getTransactionParams().do();
+
+    const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+      sender: dispenser.addr,
+      receiver: session.agentAlgoAddress,
+      amount: 2_000_000, // 2 ALGO covers the fee and the 0.1 ALGO resource payment
+      suggestedParams
+    });
+
+    const signed = txn.signTxn(dispenser.sk);
+    const { txid } = await this.algod.sendRawTransaction(signed).do();
+    await algosdk.waitForConfirmation(this.algod, txid, 5);
+
+    return {
+      txId: txid,
+      fundedAddress: session.agentAlgoAddress,
+      amountMicroAlgos: 2_000_000,
+      loraUrl: `https://lora.algokit.io/localnet/transaction/${txid}`
+    };
+  }
+
+  async submitAgentPayment(session: DemoSession, authorizationJwt: string) {
+    const status = await this.getStatus();
+    if (!status.algod.reachable) {
+      throw new ApiError(503, 'algod is unreachable — start AlgoKit LocalNet first.');
+    }
+
+    await this.validateAuthorization(session, authorizationJwt);
+
+    const suggestedParams = await this.algod.getTransactionParams().do();
+    const encoder = new TextEncoder();
+
+    const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+      sender: session.agentAlgoAddress,
+      receiver: this.treasuryAddress,
+      amount: DEMO_RESOURCE.amountMicroAlgos,
+      note: encoder.encode(`x402:${DEMO_RESOURCE.path}`),
+      suggestedParams
+    });
+
+    const signed = txn.signTxn(session.agentAlgoSk);
+    const { txid } = await this.algod.sendRawTransaction(signed).do();
+    await algosdk.waitForConfirmation(this.algod, txid, 5);
+
+    return {
+      txId: txid,
+      senderAddress: session.agentAlgoAddress,
+      receiverAddress: this.treasuryAddress,
+      amountMicroAlgos: DEMO_RESOURCE.amountMicroAlgos,
+      loraUrl: `https://lora.algokit.io/localnet/transaction/${txid}`
+    };
   }
 
   private async issueReceipt(

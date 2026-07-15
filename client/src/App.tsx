@@ -34,9 +34,32 @@ type StatusResponse = {
 type IdentityResponse = {
   sessionId: string;
   createdAt: string;
-  agent: { did: string; didDocument: unknown };
+  agent: { did: string; didDocument: unknown; algoAddress: string };
   controller: { did: string; didDocument: unknown };
   merchant: { did: string; paymentAddress: string };
+};
+
+type AgentBalanceResponse = {
+  address: string;
+  balanceMicroAlgos: number;
+  balanceAlgos: number;
+  merchantAddress: string;
+  requiredMicroAlgos: number;
+};
+
+type AgentFundResponse = {
+  txId: string;
+  fundedAddress: string;
+  amountMicroAlgos: number;
+  loraUrl: string;
+};
+
+type AgentPayResponse = {
+  txId: string;
+  senderAddress: string;
+  receiverAddress: string;
+  amountMicroAlgos: number;
+  loraUrl: string;
 };
 
 type AuthorizationResponse = {
@@ -146,6 +169,8 @@ export default function App() {
   const [active, setActive] = useState(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [identity, setIdentity] = useState<IdentityResponse | null>(null);
+  const [balance, setBalance] = useState<AgentBalanceResponse | null>(null);
+  const [fundResult, setFundResult] = useState<AgentFundResponse | null>(null);
   const [authorization, setAuthorization] = useState<AuthorizationResponse | null>(null);
   const [paywall, setPaywall] = useState<PaywallResponse | null>(null);
   const [receipt, setReceipt] = useState<ReceiptResponse | null>(null);
@@ -179,11 +204,72 @@ export default function App() {
         method: 'POST'
       });
       setIdentity(response);
+      setBalance(null);
+      setFundResult(null);
       setAuthorization(null);
       setPaywall(null);
       setReceipt(null);
       setActive(2 > STEPS.length - 1 ? STEPS.length - 1 : 1);
+      // fetch balance right away
+      void fetchBalance(response.sessionId);
     });
+  }
+
+  async function fetchBalance(sessionId: string) {
+    try {
+      const resp = await fetchJson<AgentBalanceResponse>(
+        `/api/agent/balance?sessionId=${encodeURIComponent(sessionId)}`
+      );
+      setBalance(resp);
+    } catch {
+      // ignore — algod might be offline
+    }
+  }
+
+  async function fundAgent() {
+    if (!identity) return;
+    await runAction('fund', async () => {
+      const resp = await fetchJson<AgentFundResponse>('/api/agent/fund', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId: identity.sessionId })
+      });
+      setFundResult(resp);
+      void fetchBalance(identity.sessionId);
+    });
+  }
+
+  async function sendAgentPayment() {
+    if (!identity || !authorization) {
+      setError('Create identity and authorization first.');
+      return;
+    }
+    await runAction('on-chain payment', async () => {
+      const resp = await fetchJson<AgentPayResponse>('/api/agent/pay', {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionId: identity.sessionId,
+          authorizationJwt: authorization.authorizationJwt
+        })
+      });
+      setPaymentTxId(resp.txId);
+      void fetchBalance(identity.sessionId);
+      // auto-proceed to verify
+      await runVerifyAfterPay(resp.txId);
+    });
+  }
+
+  async function runVerifyAfterPay(txId: string) {
+    if (!identity || !authorization) return;
+    const response = await fetchJson<ReceiptResponse>('/api/merchant/access', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId: identity.sessionId,
+        authorizationJwt: authorization.authorizationJwt,
+        paymentTxId: txId
+      })
+    });
+    setReceipt(response);
+    setActive(4);
   }
 
   async function issueAuthorization() {
@@ -338,6 +424,58 @@ export default function App() {
                   Create demo identity <ChevronRight size={14} />
                 </button>
               </div>
+
+              {identity ? (
+                <div className="agent-algo-card">
+                  <div className="lora-label">Agent Algorand account</div>
+                  <div className="agent-algo-addr">{identity.agent.algoAddress}</div>
+
+                  <div className="agent-balance-row">
+                    <span>Balance</span>
+                    <strong>
+                      {balance
+                        ? `${balance.balanceAlgos.toFixed(6)} ALGO`
+                        : status?.algod.reachable
+                        ? 'Loading…'
+                        : '— (algod offline)'}
+                    </strong>
+                  </div>
+
+                  {status?.algod.reachable ? (
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void fundAgent()}
+                        disabled={!!loading}
+                      >
+                        Fund agent (2 ALGO from genesis) <ChevronRight size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title="Refresh balance"
+                        onClick={() => void fetchBalance(identity.sessionId)}
+                      >
+                        ↻
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="lora-note">Start AlgoKit LocalNet to fund the agent on-chain.</span>
+                  )}
+
+                  {fundResult ? (
+                    <div className="fund-result">
+                      <Check size={13} strokeWidth={3} />
+                      Funded · tx {shorten(fundResult.txId, 20)}
+                      <a href={fundResult.loraUrl} target="_blank" rel="noopener noreferrer" className="lora-inline-link" style={{ marginLeft: 6 }}>
+                        Lora <ExternalLink size={11} />
+                      </a>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               <JsonPanel title="Identity session" value={identity} emptyText="No identity created yet." />
             </div>
           ) : null}
@@ -370,9 +508,41 @@ export default function App() {
               </div>
               <JsonPanel title="402 payment-required payload" value={paywall} emptyText="Request the merchant paywall first." />
 
+              {status?.algod.reachable ? (
+                <div className="sub-panel live-pay-panel">
+                  <div className="sub-panel-header">
+                    <strong>Automated on-chain payment</strong>
+                    <span className="badge badge-live">algod live</span>
+                  </div>
+                  <p>
+                    Signs and submits a real Algorand payment from the agent's account to the merchant, then
+                    auto-verifies and issues a receipt.
+                  </p>
+                  <div className="agent-balance-row">
+                    <span>Agent balance</span>
+                    <strong>
+                      {balance ? `${balance.balanceAlgos.toFixed(6)} ALGO` : 'Loading…'}
+                    </strong>
+                  </div>
+                  {balance && balance.balanceMicroAlgos < balance.requiredMicroAlgos + 2000 ? (
+                    <div className="warn-banner">
+                      Agent needs funds — go back to Identity step and click Fund agent.
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void sendAgentPayment()}
+                    disabled={!!loading || !balance || balance.balanceMicroAlgos < balance.requiredMicroAlgos + 2000}
+                  >
+                    Send payment from agent &amp; verify <Zap size={14} />
+                  </button>
+                </div>
+              ) : null}
+
               <div className="sub-panel">
                 <div className="sub-panel-header">
-                  <strong>Live settlement</strong>
+                  <strong>Manual live settlement</strong>
                   <span className={`badge ${status?.algod.reachable ? 'badge-live' : 'badge-muted'}`}>
                     {status?.algod.reachable ? 'enabled' : 'needs reachable algod'}
                   </span>
