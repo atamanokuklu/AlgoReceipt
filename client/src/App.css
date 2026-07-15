@@ -326,6 +326,38 @@ input {
   color: #6b8a83;
 }
 
+.receipt-grid-full {
+  display: grid;
+  gap: 8px;
+}
+
+.receipt-field {
+  border: 1px solid #c7ddd5;
+  border-radius: 10px;
+  background: #f7fcfa;
+  padding: 8px 10px;
+}
+
+.receipt-field-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5f7f75;
+  margin-bottom: 4px;
+}
+
+.receipt-field-value {
+  font-size: 13px;
+  color: #0a1614;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.receipt-field-value-code {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
+
 .receipt-stamp {
   border: 2px solid currentColor;
   border-radius: 8px;
@@ -354,4 +386,151 @@ input {
   gap: 8px;
   color: #0f7a5b;
   font-size: 13px;
+}
+
+/* ── Lora Explorer ────────────────────────────────────────── */
+
+/* ── Agent Algo card (Identity step) ─────────────────────── */
+
+.agent-algo-card {
+  border: 1px solid #1e3a34;
+  border-radius: 18px;
+  background: #0a1614;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.agent-algo-addr {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  color: #7fe0be;
+  word-break: break-all;
+}
+
+.agent-balance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.agent-balance-row span {
+  color: #6b8a83;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.agent-balance-row strong {
+  color: #eaf5f0;
+}
+
+.icon-button {
+  border: 1px solid #1e3a34;
+  border-radius: 10px;
+  background: transparent;
+  color: #7fe0be;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.icon-button:hover {
+  background: #123a31;
+}
+
+.fund-result {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #7fe0be;
+  background: rgba(15, 122, 91, 0.12);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+/* ── Automated live payment panel ────────────────────────── */
+
+.live-pay-panel p {
+  margin: 0 0 10px;
+  color: #a9c6bc;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.warn-banner {
+  background: rgba(164, 126, 25, 0.15);
+  border: 1px solid rgba(164, 126, 25, 0.3);
+  color: #ffd98a;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+
+.lora-panel {
+  border: 1px solid #1e3a34;
+  border-radius: 18px;
+  background: #0a1614;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.lora-panel-sim {
+  opacity: 0.6;
+}
+
+.lora-label {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 11px;
+  color: #5c9985;
+}
+
+.lora-note {
+  font-size: 12px;
+  color: #6b8a83;
+}
+
+.lora-txid {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  color: #7fe0be;
+  word-break: break-all;
+}
+
+.lora-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #123a31;
+  color: #7fe0be;
+  border-radius: 10px;
+  padding: 9px 13px;
+  font-size: 13px;
+  text-decoration: none;
+  width: fit-content;
+  transition: background 0.15s;
+}
+
+.lora-button:hover {
+  background: #1a4d3f;
+}
+
+.lora-inline-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #7fe0be;
+  font-size: 12px;
+  text-decoration: none;
+  opacity: 0.8;
+}
+
+.lora-inline-link:hover {
+  opacity: 1;
+  text-decoration: underline;
 }

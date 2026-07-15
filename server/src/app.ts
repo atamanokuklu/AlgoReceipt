@@ -17,6 +17,11 @@ const settlementSchema = z.object({
   paymentTxId: z.string().min(1).optional()
 });
 
+const agentPaySchema = z.object({
+  sessionId: z.string().uuid(),
+  authorizationJwt: z.string().min(1)
+});
+
 const verifySchema = z.object({
   jwt: z.string().min(1)
 });
@@ -74,7 +79,8 @@ app.post('/api/identity/demo', asyncRoute(async (_req, res) => {
     createdAt: session.createdAt,
     agent: {
       did: session.agent.did,
-      didDocument: session.agent.didDocument
+      didDocument: session.agent.didDocument,
+      algoAddress: session.agentAlgoAddress
     },
     controller: {
       did: session.controller.did,
@@ -114,6 +120,26 @@ app.post('/api/demo/simulate-receipt', asyncRoute(async (req, res) => {
 app.post('/api/credentials/verify', asyncRoute(async (req, res) => {
   const body = verifySchema.parse(req.body);
   res.json(await merchantService.verifyCredential(body.jwt));
+}));
+
+// ── Agent funding & on-chain payment ──────────────────────────────────
+
+app.get('/api/agent/balance', asyncRoute(async (req, res) => {
+  const sessionId = z.string().uuid().parse(req.query['sessionId']);
+  const session = getSession(sessionId);
+  res.json(await merchantService.getAgentBalance(session));
+}));
+
+app.post('/api/agent/fund', asyncRoute(async (req, res) => {
+  const { sessionId } = z.object({ sessionId: z.string().uuid() }).parse(req.body);
+  const session = getSession(sessionId);
+  res.json(await merchantService.fundAgent(session));
+}));
+
+app.post('/api/agent/pay', asyncRoute(async (req, res) => {
+  const body = agentPaySchema.parse(req.body);
+  const session = getSession(body.sessionId);
+  res.json(await merchantService.submitAgentPayment(session, body.authorizationJwt));
 }));
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

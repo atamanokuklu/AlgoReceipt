@@ -3,6 +3,7 @@ import {
   Bot,
   Check,
   ChevronRight,
+  ExternalLink,
   FileCheck2,
   Fingerprint,
   ShieldCheck,
@@ -33,9 +34,32 @@ type StatusResponse = {
 type IdentityResponse = {
   sessionId: string;
   createdAt: string;
-  agent: { did: string; didDocument: unknown };
+  agent: { did: string; didDocument: unknown; algoAddress: string };
   controller: { did: string; didDocument: unknown };
   merchant: { did: string; paymentAddress: string };
+};
+
+type AgentBalanceResponse = {
+  address: string;
+  balanceMicroAlgos: number;
+  balanceAlgos: number;
+  merchantAddress: string;
+  requiredMicroAlgos: number;
+};
+
+type AgentFundResponse = {
+  txId: string;
+  fundedAddress: string;
+  amountMicroAlgos: number;
+  loraUrl: string;
+};
+
+type AgentPayResponse = {
+  txId: string;
+  senderAddress: string;
+  receiverAddress: string;
+  amountMicroAlgos: number;
+  loraUrl: string;
 };
 
 type AuthorizationResponse = {
@@ -106,10 +130,47 @@ const STEPS = [
   }
 ] as const;
 
+/** Map the server's network string to a Lora segment. */
+function loraNetwork(network: string): string {
+  if (network.includes('testnet')) return 'testnet';
+  if (network.includes('mainnet')) return 'mainnet';
+  return 'localnet';
+}
+
+function loraUrl(txId: string, network: string): string {
+  return `https://lora.algokit.io/${loraNetwork(network)}/transaction/${txId}`;
+}
+
+function LoraPanel({ txId, network, simulation }: { txId: string; network: string; simulation: boolean }) {
+  if (!txId || txId === '—' || simulation) {
+    return (
+      <div className="lora-panel lora-panel-sim">
+        <div className="lora-label">Lora Explorer</div>
+        <span className="lora-note">Not available for simulated transactions — no on-chain proof.</span>
+      </div>
+    );
+  }
+
+  const url = loraUrl(txId, network);
+  const net = loraNetwork(network);
+
+  return (
+    <div className="lora-panel">
+      <div className="lora-label">View on Lora · {net}</div>
+      <div className="lora-txid">{txId}</div>
+      <a href={url} target="_blank" rel="noopener noreferrer" className="lora-button">
+        Open in Lora Explorer <ExternalLink size={13} />
+      </a>
+    </div>
+  );
+}
+
 export default function App() {
   const [active, setActive] = useState(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [identity, setIdentity] = useState<IdentityResponse | null>(null);
+  const [balance, setBalance] = useState<AgentBalanceResponse | null>(null);
+  const [fundResult, setFundResult] = useState<AgentFundResponse | null>(null);
   const [authorization, setAuthorization] = useState<AuthorizationResponse | null>(null);
   const [paywall, setPaywall] = useState<PaywallResponse | null>(null);
   const [receipt, setReceipt] = useState<ReceiptResponse | null>(null);
@@ -143,11 +204,72 @@ export default function App() {
         method: 'POST'
       });
       setIdentity(response);
+      setBalance(null);
+      setFundResult(null);
       setAuthorization(null);
       setPaywall(null);
       setReceipt(null);
       setActive(2 > STEPS.length - 1 ? STEPS.length - 1 : 1);
+      // fetch balance right away
+      void fetchBalance(response.sessionId);
     });
+  }
+
+  async function fetchBalance(sessionId: string) {
+    try {
+      const resp = await fetchJson<AgentBalanceResponse>(
+        `/api/agent/balance?sessionId=${encodeURIComponent(sessionId)}`
+      );
+      setBalance(resp);
+    } catch {
+      // ignore — algod might be offline
+    }
+  }
+
+  async function fundAgent() {
+    if (!identity) return;
+    await runAction('fund', async () => {
+      const resp = await fetchJson<AgentFundResponse>('/api/agent/fund', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId: identity.sessionId })
+      });
+      setFundResult(resp);
+      void fetchBalance(identity.sessionId);
+    });
+  }
+
+  async function sendAgentPayment() {
+    if (!identity || !authorization) {
+      setError('Create identity and authorization first.');
+      return;
+    }
+    await runAction('on-chain payment', async () => {
+      const resp = await fetchJson<AgentPayResponse>('/api/agent/pay', {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionId: identity.sessionId,
+          authorizationJwt: authorization.authorizationJwt
+        })
+      });
+      setPaymentTxId(resp.txId);
+      void fetchBalance(identity.sessionId);
+      // auto-proceed to verify
+      await runVerifyAfterPay(resp.txId);
+    });
+  }
+
+  async function runVerifyAfterPay(txId: string) {
+    if (!identity || !authorization) return;
+    const response = await fetchJson<ReceiptResponse>('/api/merchant/access', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId: identity.sessionId,
+        authorizationJwt: authorization.authorizationJwt,
+        paymentTxId: txId
+      })
+    });
+    setReceipt(response);
+    setActive(4);
   }
 
   async function issueAuthorization() {
@@ -217,12 +339,13 @@ export default function App() {
     }
 
     await runAction('live-settlement', async () => {
+      const normalizedTxId = paymentTxId.trim().toUpperCase();
       const response = await fetchJson<ReceiptResponse>('/api/merchant/access', {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
           authorizationJwt: authorization.authorizationJwt,
-          paymentTxId: paymentTxId.trim()
+          paymentTxId: normalizedTxId
         })
       });
       setReceipt(response);
@@ -302,6 +425,58 @@ export default function App() {
                   Create demo identity <ChevronRight size={14} />
                 </button>
               </div>
+
+              {identity ? (
+                <div className="agent-algo-card">
+                  <div className="lora-label">Agent Algorand account</div>
+                  <div className="agent-algo-addr">{identity.agent.algoAddress}</div>
+
+                  <div className="agent-balance-row">
+                    <span>Balance</span>
+                    <strong>
+                      {balance
+                        ? `${balance.balanceAlgos.toFixed(6)} ALGO`
+                        : status?.algod.reachable
+                        ? 'Loading…'
+                        : '— (algod offline)'}
+                    </strong>
+                  </div>
+
+                  {status?.algod.reachable ? (
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void fundAgent()}
+                        disabled={!!loading}
+                      >
+                        Fund agent (2 ALGO from genesis) <ChevronRight size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title="Refresh balance"
+                        onClick={() => void fetchBalance(identity.sessionId)}
+                      >
+                        ↻
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="lora-note">Start AlgoKit LocalNet to fund the agent on-chain.</span>
+                  )}
+
+                  {fundResult ? (
+                    <div className="fund-result">
+                      <Check size={13} strokeWidth={3} />
+                      Funded · tx {shorten(fundResult.txId, 20)}
+                      <a href={fundResult.loraUrl} target="_blank" rel="noopener noreferrer" className="lora-inline-link" style={{ marginLeft: 6 }}>
+                        Lora <ExternalLink size={11} />
+                      </a>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               <JsonPanel title="Identity session" value={identity} emptyText="No identity created yet." />
             </div>
           ) : null}
@@ -334,9 +509,41 @@ export default function App() {
               </div>
               <JsonPanel title="402 payment-required payload" value={paywall} emptyText="Request the merchant paywall first." />
 
+              {status?.algod.reachable ? (
+                <div className="sub-panel live-pay-panel">
+                  <div className="sub-panel-header">
+                    <strong>Automated on-chain payment</strong>
+                    <span className="badge badge-live">algod live</span>
+                  </div>
+                  <p>
+                    Signs and submits a real Algorand payment from the agent's account to the merchant, then
+                    auto-verifies and issues a receipt.
+                  </p>
+                  <div className="agent-balance-row">
+                    <span>Agent balance</span>
+                    <strong>
+                      {balance ? `${balance.balanceAlgos.toFixed(6)} ALGO` : 'Loading…'}
+                    </strong>
+                  </div>
+                  {balance && balance.balanceMicroAlgos < balance.requiredMicroAlgos + 2000 ? (
+                    <div className="warn-banner">
+                      Agent needs funds — go back to Identity step and click Fund agent.
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void sendAgentPayment()}
+                    disabled={!!loading || !balance || balance.balanceMicroAlgos < balance.requiredMicroAlgos + 2000}
+                  >
+                    Send payment from agent &amp; verify <Zap size={14} />
+                  </button>
+                </div>
+              ) : null}
+
               <div className="sub-panel">
                 <div className="sub-panel-header">
-                  <strong>Live settlement</strong>
+                  <strong>Manual live settlement</strong>
                   <span className={`badge ${status?.algod.reachable ? 'badge-live' : 'badge-muted'}`}>
                     {status?.algod.reachable ? 'enabled' : 'needs reachable algod'}
                   </span>
@@ -350,6 +557,16 @@ export default function App() {
                     disabled={!status?.algod.reachable}
                   />
                 </label>
+                {paymentTxId.trim() && status?.algod.reachable ? (
+                  <a
+                    href={loraUrl(paymentTxId.trim(), status?.offer.network ?? 'algorand:localnet')}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="lora-inline-link"
+                  >
+                    Preview on Lora <ExternalLink size={12} />
+                  </a>
+                ) : null}
                 <button
                   type="button"
                   className="secondary-button"
@@ -381,6 +598,14 @@ export default function App() {
                 receipt={receipt}
                 agentDid={identity?.agent.did}
                 merchantDid={status?.merchantDid}
+              />
+              <LoraPanel
+                txId={(() => {
+                  const subject = (receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined)?.vc?.credentialSubject;
+                  return typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : '—';
+                })()}
+                network={status?.offer.network ?? 'algorand:localnet'}
+                simulation={receipt?.mode === 'offline-simulation'}
               />
               <JsonPanel title="Receipt + verification" value={receipt} emptyText="No receipt yet." />
             </div>
@@ -445,12 +670,55 @@ function ReceiptCard({
   agentDid?: string;
   merchantDid?: string;
 }) {
-  const subject = (receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined)
-    ?.vc?.credentialSubject;
+  const subject = (
+    receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined
+  )?.vc?.credentialSubject;
+  const proof =
+    (subject?.proof as
+      | {
+          confirmedRound?: number;
+          roundTime?: number;
+          senderAddress?: string;
+          receiverAddress?: string;
+          feeMicroAlgos?: number;
+          note?: string;
+          verifier?: string;
+          message?: string;
+        }
+      | undefined) ?? {};
+
   const simulation = subject?.simulation === true;
-  const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : '—';
-  const amount = typeof subject?.amountUsd === 'number' ? `$${subject.amountUsd.toFixed(2)}` : '—';
-  const network = typeof subject?.network === 'string' ? subject.network : 'algorand-localnet';
+  const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'N/A';
+  const amountUsd =
+    typeof subject?.amountUsd === 'number' ? `$${subject.amountUsd.toFixed(2)}` : 'N/A';
+  const amountMicroAlgos =
+    typeof subject?.amountMicroAlgos === 'number'
+      ? `${subject.amountMicroAlgos.toLocaleString()} µALGO`
+      : 'N/A';
+  const network = typeof subject?.network === 'string' ? subject.network : 'N/A';
+
+  const details: Array<{ label: string; value: string; code?: boolean }> = [
+    { label: 'Agent DID', value: typeof subject?.id === 'string' ? subject.id : agentDid ?? 'N/A', code: true },
+    { label: 'Controller DID', value: typeof subject?.controllerDid === 'string' ? subject.controllerDid : 'N/A', code: true },
+    { label: 'Merchant DID', value: typeof subject?.merchantDid === 'string' ? subject.merchantDid : merchantDid ?? 'N/A', code: true },
+    { label: 'Merchant payment address', value: typeof subject?.merchantPaymentAddress === 'string' ? subject.merchantPaymentAddress : 'N/A', code: true },
+    { label: 'Resource path', value: typeof subject?.resourcePath === 'string' ? subject.resourcePath : 'N/A', code: true },
+    { label: 'Description', value: typeof subject?.description === 'string' ? subject.description : 'N/A' },
+    { label: 'Settlement mode', value: typeof subject?.settlementMode === 'string' ? subject.settlementMode : 'N/A' },
+    { label: 'Asset', value: typeof subject?.asset === 'string' ? subject.asset : 'N/A' },
+    { label: 'Amount (USD)', value: amountUsd },
+    { label: 'Amount (µALGO)', value: amountMicroAlgos },
+    { label: 'Network', value: network, code: true },
+    { label: 'Transaction ID', value: txId, code: true },
+    { label: 'Confirmed round', value: typeof proof.confirmedRound === 'number' ? String(proof.confirmedRound) : 'N/A' },
+    { label: 'Round time', value: formatUnix(proof.roundTime) },
+    { label: 'Sender address', value: proof.senderAddress ?? 'N/A', code: true },
+    { label: 'Receiver address', value: proof.receiverAddress ?? 'N/A', code: true },
+    { label: 'Fee (µALGO)', value: typeof proof.feeMicroAlgos === 'number' ? String(proof.feeMicroAlgos) : 'N/A' },
+    { label: 'Note', value: proof.note ?? 'N/A', code: true },
+    { label: 'Verifier', value: proof.verifier ?? 'N/A' },
+    { label: 'Verifier message', value: proof.message ?? 'N/A' }
+  ];
 
   return (
     <div className="receipt-card">
@@ -463,12 +731,15 @@ function ReceiptCard({
           {simulation ? 'Simulated' : 'Verified'}
         </div>
       </div>
-      <div className="receipt-grid">
-        <KvRow label="Paid by" value={shorten(agentDid)} />
-        <KvRow label="Paid to" value={shorten(merchantDid)} />
-        <KvRow label="Amount" value={amount} />
-        <KvRow label="Network" value={network} />
-        <KvRow label="Tx id" value={shorten(txId, 18)} />
+      <div className="receipt-grid-full">
+        {details.map((entry) => (
+          <div key={entry.label} className="receipt-field">
+            <div className="receipt-field-label">{entry.label}</div>
+            <div className={entry.code ? 'receipt-field-value receipt-field-value-code' : 'receipt-field-value'}>
+              {entry.value}
+            </div>
+          </div>
+        ))}
       </div>
       <div className="receipt-footer">
         <Check size={14} strokeWidth={3} />
@@ -478,6 +749,14 @@ function ReceiptCard({
       </div>
     </div>
   );
+}
+
+function formatUnix(value: number | undefined): string {
+  if (!value || value <= 0) {
+    return 'N/A';
+  }
+
+  return new Date(value * 1000).toISOString();
 }
 
 function shorten(value: string | undefined, width = 24) {

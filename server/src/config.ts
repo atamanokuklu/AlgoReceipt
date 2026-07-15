@@ -5,7 +5,10 @@ const envSchema = z.object({
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
   ALGOD_SERVER: z.string().default('http://localhost'),
   ALGOD_PORT: z.string().default('4001'),
-  ALGOD_TOKEN: z.string().default('')
+  ALGOD_TOKEN: z.string().default(''),
+  KMD_SERVER: z.string().default('http://localhost'),
+  KMD_PORT: z.coerce.number().int().positive().default(4002),
+  KMD_TOKEN: z.string().default('')
 });
 
 export const settings = envSchema.parse(process.env);
