@@ -3,6 +3,7 @@ import {
   Bot,
   Check,
   ChevronRight,
+  ExternalLink,
   FileCheck2,
   Fingerprint,
   ShieldCheck,
@@ -105,6 +106,41 @@ const STEPS = [
     body: 'Inspect the receipt VC-JWT, decoded claims, and verification result.'
   }
 ] as const;
+
+/** Map the server's network string to a Lora segment. */
+function loraNetwork(network: string): string {
+  if (network.includes('testnet')) return 'testnet';
+  if (network.includes('mainnet')) return 'mainnet';
+  return 'localnet';
+}
+
+function loraUrl(txId: string, network: string): string {
+  return `https://lora.algokit.io/${loraNetwork(network)}/transaction/${txId}`;
+}
+
+function LoraPanel({ txId, network, simulation }: { txId: string; network: string; simulation: boolean }) {
+  if (!txId || txId === '—' || simulation) {
+    return (
+      <div className="lora-panel lora-panel-sim">
+        <div className="lora-label">Lora Explorer</div>
+        <span className="lora-note">Not available for simulated transactions — no on-chain proof.</span>
+      </div>
+    );
+  }
+
+  const url = loraUrl(txId, network);
+  const net = loraNetwork(network);
+
+  return (
+    <div className="lora-panel">
+      <div className="lora-label">View on Lora · {net}</div>
+      <div className="lora-txid">{txId}</div>
+      <a href={url} target="_blank" rel="noopener noreferrer" className="lora-button">
+        Open in Lora Explorer <ExternalLink size={13} />
+      </a>
+    </div>
+  );
+}
 
 export default function App() {
   const [active, setActive] = useState(0);
@@ -350,6 +386,16 @@ export default function App() {
                     disabled={!status?.algod.reachable}
                   />
                 </label>
+                {paymentTxId.trim() && status?.algod.reachable ? (
+                  <a
+                    href={loraUrl(paymentTxId.trim(), status?.offer.network ?? 'algorand:localnet')}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="lora-inline-link"
+                  >
+                    Preview on Lora <ExternalLink size={12} />
+                  </a>
+                ) : null}
                 <button
                   type="button"
                   className="secondary-button"
@@ -381,6 +427,14 @@ export default function App() {
                 receipt={receipt}
                 agentDid={identity?.agent.did}
                 merchantDid={status?.merchantDid}
+              />
+              <LoraPanel
+                txId={(() => {
+                  const subject = (receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined)?.vc?.credentialSubject;
+                  return typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : '—';
+                })()}
+                network={status?.offer.network ?? 'algorand:localnet'}
+                simulation={receipt?.mode === 'offline-simulation'}
               />
               <JsonPanel title="Receipt + verification" value={receipt} emptyText="No receipt yet." />
             </div>
