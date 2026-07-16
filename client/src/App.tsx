@@ -141,7 +141,7 @@ const STEPS = [
   }
 ] as const;
 
-const RECEIPT_HISTORY_STORAGE_KEY = 'algorand-x402-receipt-history';
+const RECEIPT_HISTORY_STORAGE_KEY = 'algorand-x402-verified-receipts-v2';
 
 /** Map the server's network string to a Lora segment. */
 function loraNetwork(network: string): string {
@@ -346,7 +346,7 @@ export default function App() {
           resourceId: selectedResourceId
         })
       });
-      recordReceipt(response);
+      setReceipt(response);
       setActive(4);
     });
   }
@@ -374,6 +374,11 @@ export default function App() {
   }
 
   function recordReceipt(nextReceipt: ReceiptResponse) {
+    if (!isLiveVerifiedReceipt(nextReceipt)) {
+      setError('Receipt was not accepted because live VC and algod verification did not both succeed.');
+      return;
+    }
+
     setReceipt(nextReceipt);
     setReceiptHistory((current) => [nextReceipt, ...current]);
     setSelectedReceiptIndex(0);
@@ -642,7 +647,7 @@ export default function App() {
             <div className="detail-stack">
               {receiptHistory.length === 0 ? (
                 <div className="empty-receipts">
-                  No receipts yet. Complete a settlement to create the first receipt.
+                  No live verified receipts yet. Complete and verify an on-chain settlement to create the first receipt.
                 </div>
               ) : (
                 <>
@@ -652,7 +657,7 @@ export default function App() {
                         <div className="json-title">Receipt history</div>
                         <strong>{receiptHistory.length} receipt{receiptHistory.length === 1 ? '' : 's'}</strong>
                       </div>
-                      <span className="badge badge-live">VC signatures checked</span>
+                      <span className="badge badge-live">Live VC + algod verified</span>
                     </div>
                     {receiptHistory.map((item, index) => (
                       <ReceiptListItem
@@ -765,6 +770,19 @@ function getReceiptSubject(receipt: ReceiptResponse | null): Record<string, unkn
       | { vc?: { credentialSubject?: Record<string, unknown> } }
       | undefined
   )?.vc?.credentialSubject;
+}
+
+function isLiveVerifiedReceipt(receipt: ReceiptResponse): boolean {
+  const subject = getReceiptSubject(receipt);
+  const proof = subject?.proof as { verifier?: unknown } | undefined;
+  return (
+    receipt.mode === 'live-algod-verified' &&
+    receipt.verification.valid === true &&
+    subject?.simulation === false &&
+    proof?.verifier === 'algod' &&
+    typeof subject?.paymentTxId === 'string' &&
+    !subject.paymentTxId.startsWith('SIM-')
+  );
 }
 
 function ReceiptListItem({
@@ -956,7 +974,11 @@ function loadReceiptHistory(): ReceiptResponse[] {
       }
 
       const candidate = item as Partial<ReceiptResponse>;
-      return typeof candidate.receiptJwt === 'string' && Boolean(candidate.verification);
+      return (
+        typeof candidate.receiptJwt === 'string' &&
+        Boolean(candidate.verification) &&
+        isLiveVerifiedReceipt(candidate as ReceiptResponse)
+      );
     });
   } catch {
     return [];
