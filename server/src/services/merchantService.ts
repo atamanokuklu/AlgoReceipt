@@ -94,6 +94,7 @@ export interface ReceiptClaims {
   paymentTxId: string;
   settlementMode: 'live-algod-verified' | 'offline-simulation';
   simulation: boolean;
+  verifiedAt: string;
   proof: {
     confirmedRound?: number;
     roundTime?: number;
@@ -497,6 +498,7 @@ export class MerchantService {
       paymentTxId: input.paymentTxId,
       settlementMode: input.settlementMode,
       simulation: input.simulation,
+      verifiedAt: new Date().toISOString(),
       proof: input.proof
     };
 

@@ -868,7 +868,8 @@ function ReceiptCard({
     { label: 'Network', value: network, code: true },
     { label: 'Transaction ID', value: txId, code: true },
     { label: 'Confirmed round', value: typeof proof.confirmedRound === 'number' ? String(proof.confirmedRound) : 'N/A' },
-    { label: 'Round time (Berlin)', value: formatUnix(proof.roundTime) },
+    { label: 'Verified at (Berlin)', value: formatIsoBerlin(typeof subject?.verifiedAt === 'string' ? subject.verifiedAt : undefined) },
+    { label: 'On-chain round time (LocalNet)', value: formatUnix(proof.roundTime) },
     { label: 'Sender address', value: proof.senderAddress ?? 'N/A', code: true },
     { label: 'Receiver address', value: proof.receiverAddress ?? 'N/A', code: true },
     { label: 'Fee (µALGO)', value: typeof proof.feeMicroAlgos === 'number' ? String(proof.feeMicroAlgos) : 'N/A' },
@@ -924,6 +925,22 @@ function formatUnix(value: number | undefined): string {
   }).format(new Date(value * 1000));
 }
 
+function formatIsoBerlin(value: string | undefined): string {
+  if (!value) {
+    return 'N/A';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'N/A';
+  }
+
+  return new Intl.DateTimeFormat('de-DE', {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+    timeZone: 'Europe/Berlin'
+  }).format(date);
+}
 function downloadReceipt(receipt: ReceiptResponse | null) {
   if (!receipt) {
     return;
