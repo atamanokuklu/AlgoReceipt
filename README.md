@@ -1,62 +1,51 @@
-# Algorand x402 Agent Identity + Verifiable Receipts Demo
+# Algorand Agent Identity + Payment Receipts
 
-Hackathon prototype with:
+Local demo of the ACK-ID + ACK-Pay idea:
 
-- **Vite + React + TypeScript** frontend
-- **Express + TypeScript** backend
-- **Ed25519 `did:key`** demo identities
-- **VC-JWT** spend authorizations and payment receipts
-- **Algorand algod verification** for live settlement when LocalNet is actually reachable
-- **Clearly labeled offline simulation mode** for demo UI only
+1. An agent gets a cryptographic `did:key` identity.
+2. A controller issues a W3C Verifiable Credential authorizing spend.
+3. The agent requests an x402-protected market-data resource.
+4. The agent pays on Algorand LocalNet.
+5. The merchant verifies the transaction and issues a signed VC receipt.
+6. The receipt can be checked offline and linked to Lora for chain inspection.
 
-## Workspace layout
+This wires together existing primitives rather than inventing a new protocol: W3C DIDs/VCs, VC-JWT signatures, x402-style payment challenges, and Algorand transactions. The demo makes the missing integration visible: a wallet address alone does not identify the agent, its controller, its authority, or the purpose of payment.
 
-- `client` – React demo UI
-- `server` – Express API, DID/VC logic, Algorand verification
+## Run locally
 
-## Requirements
-
-- Node **24+**
-- npm **11+**
-- For live Algorand settlement verification: an **algod endpoint**
-
-This repo defaults to **LocalNet-style algod settings**:
-
-- `ALGOD_SERVER=http://localhost`
-- `ALGOD_PORT=4001`
-- `ALGOD_TOKEN=`
-
-If Docker is not running and LocalNet is unavailable, the app stays honest:
-
-- `/api/status` reports algod as unreachable
-- live settlement stays disabled/fails safely
-- the UI offers a **demo-only offline simulation**
-
-## Install
-
-> On this Windows setup, run npm through `cmd /c` to avoid `npm.ps1` execution-policy issues.
+Requirements: Node 24+, npm 11+, Docker, and AlgoKit.
 
 ```powershell
+cmd /c "algokit localnet start"
 cmd /c "npm install"
-```
-
-## Run
-
-Start both apps:
-
-```powershell
 cmd /c "npm run dev"
 ```
 
-Or individually:
+Open `http://localhost:5173`.
 
-```powershell
-cmd /c "npm run dev -w server"
-cmd /c "npm run dev -w client"
-```
+The backend uses:
 
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:3001`
+| Service | URL |
+| --- | --- |
+| React/Vite | `http://localhost:5173` |
+| Express API | `http://localhost:3001` |
+| algod LocalNet | `http://localhost:4001` |
+| KMD LocalNet | `http://localhost:4002` |
+| Lora | `https://lora.algokit.io/localnet` |
+
+`server\.env.example` contains the LocalNet defaults. The LocalNet KMD wallet funds demo agents from the genesis account.
+
+## Demo walkthrough
+
+Use the five steps in the UI:
+
+1. **Request** — inspect the paid `ALGO/USD` resource and x402 quote.
+2. **Identity** — create an agent DID, controller DID, and Algorand account; fund the account from LocalNet.
+3. **Authorize** — issue a signed spend-authorization VC with a daily cap.
+4. **Settle** — request the payment challenge, send a real LocalNet payment, and verify it.
+5. **Receipt** — browse all receipts from the current session, select one for full details, and open its transaction in Lora.
+
+The automated path signs a real payment locally. The offline simulation is intentionally labeled and never claims on-chain settlement.
 
 ## Build and test
 
@@ -65,44 +54,15 @@ cmd /c "npm run build"
 cmd /c "npm run test"
 ```
 
-## Environment
+## Project layout
 
-Create `server\.env` from `server\.env.example` if you need custom settings.
+- `client` — React flow, receipt history, detailed receipt view, and Lora links.
+- `server/src/app.ts` — API routes.
+- `server/src/services/merchantService.ts` — authorization, payment verification, and receipt issuance.
+- `server/src/services/didKey.ts` and `vc.ts` — DID documents and VC-JWT signing/verification.
+- `server/src/services/kmdService.ts` — LocalNet genesis-wallet funding.
+- `docs/demo-slides.md` — evaluator-ready presentation script.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `3001` | Express server port |
-| `CLIENT_ORIGIN` | `http://localhost:5173` | CORS origin |
-| `ALGOD_SERVER` | `http://localhost` | algod host |
-| `ALGOD_PORT` | `4001` | algod port |
-| `ALGOD_TOKEN` | empty | algod API token |
+## Scope
 
-## LocalNet notes
-
-Live settlement verification requires a real algod endpoint. A common local option is Algorand LocalNet, which itself requires **Docker**. Docker is **not** installed in this validation environment, so live settlement could not be exercised here.
-
-Example LocalNet-oriented env:
-
-```env
-ALGOD_SERVER=http://localhost
-ALGOD_PORT=4001
-ALGOD_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-```
-
-Once algod is reachable, the backend verifies a submitted transaction id against algod and only then issues a live receipt VC-JWT.
-
-## Demo flow
-
-1. Preview the paid request
-2. Create a demo agent/controller `did:key` identity pair
-3. Issue a signed spend authorization VC-JWT
-4. Request the merchant paywall, then either:
-   - submit a **real Algorand tx id** for live verification, or
-   - use the **offline simulation** path for demo purposes only
-5. Inspect the signed receipt VC-JWT and verification output
-
-## Limitations
-
-- Live settlement depends on a reachable algod node.
-- The demo uses in-memory sessions and spend tracking.
-- Offline simulation issues a clearly marked simulated receipt and does **not** claim on-chain settlement.
+Sessions and the spend ledger are in memory for demonstration. `did:key` is used for local portability; production deployments would add durable key custody, revocation/status checks, stronger replay protection, and a wallet/ARC-58 adapter.

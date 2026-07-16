@@ -10,7 +10,6 @@ import { SpendLedger } from './spendLedger.js';
 import {
   issueCredentialJwt,
   verifyCredentialJwt,
-  type CredentialJwtPayload,
   type VerifiedCredential
 } from './vc.js';
 

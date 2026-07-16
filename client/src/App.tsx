@@ -174,6 +174,8 @@ export default function App() {
   const [authorization, setAuthorization] = useState<AuthorizationResponse | null>(null);
   const [paywall, setPaywall] = useState<PaywallResponse | null>(null);
   const [receipt, setReceipt] = useState<ReceiptResponse | null>(null);
+  const [receiptHistory, setReceiptHistory] = useState<ReceiptResponse[]>([]);
+  const [selectedReceiptIndex, setSelectedReceiptIndex] = useState(0);
   const [dailyCapUsd, setDailyCapUsd] = useState('50');
   const [paymentTxId, setPaymentTxId] = useState('');
   const [loading, setLoading] = useState<string | null>(null);
@@ -209,6 +211,10 @@ export default function App() {
       setAuthorization(null);
       setPaywall(null);
       setReceipt(null);
+      setReceiptHistory([]);
+      setSelectedReceiptIndex(0);
+      setReceiptHistory([]);
+      setSelectedReceiptIndex(0);
       setActive(2 > STEPS.length - 1 ? STEPS.length - 1 : 1);
       // fetch balance right away
       void fetchBalance(response.sessionId);
@@ -268,7 +274,7 @@ export default function App() {
         paymentTxId: txId
       })
     });
-    setReceipt(response);
+    recordReceipt(response);
     setActive(4);
   }
 
@@ -289,6 +295,8 @@ export default function App() {
       setAuthorization(response);
       setPaywall(null);
       setReceipt(null);
+      setReceiptHistory([]);
+      setSelectedReceiptIndex(0);
       setActive(3 > STEPS.length - 1 ? STEPS.length - 1 : 2);
     });
   }
@@ -327,7 +335,7 @@ export default function App() {
           authorizationJwt: authorization.authorizationJwt
         })
       });
-      setReceipt(response);
+      recordReceipt(response);
       setActive(4);
     });
   }
@@ -348,9 +356,15 @@ export default function App() {
           paymentTxId: normalizedTxId
         })
       });
-      setReceipt(response);
+      recordReceipt(response);
       setActive(4);
     });
+  }
+
+  function recordReceipt(nextReceipt: ReceiptResponse) {
+    setReceipt(nextReceipt);
+    setReceiptHistory((current) => [nextReceipt, ...current]);
+    setSelectedReceiptIndex(0);
   }
 
   return (
@@ -594,20 +608,50 @@ export default function App() {
 
           {active === 4 ? (
             <div className="detail-stack">
-              <ReceiptCard
-                receipt={receipt}
-                agentDid={identity?.agent.did}
-                merchantDid={status?.merchantDid}
-              />
-              <LoraPanel
-                txId={(() => {
-                  const subject = (receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined)?.vc?.credentialSubject;
-                  return typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : '—';
-                })()}
-                network={status?.offer.network ?? 'algorand:localnet'}
-                simulation={receipt?.mode === 'offline-simulation'}
-              />
-              <JsonPanel title="Receipt + verification" value={receipt} emptyText="No receipt yet." />
+              {receiptHistory.length === 0 ? (
+                <div className="empty-receipts">
+                  No receipts yet. Complete a settlement to create the first receipt.
+                </div>
+              ) : (
+                <>
+                  <div className="receipt-list">
+                    <div className="receipt-list-heading">
+                      <div>
+                        <div className="json-title">Receipt history</div>
+                        <strong>{receiptHistory.length} receipt{receiptHistory.length === 1 ? '' : 's'}</strong>
+                      </div>
+                      <span className="badge badge-live">VC signatures checked</span>
+                    </div>
+                    {receiptHistory.map((item, index) => (
+                      <ReceiptListItem
+                        key={`${item.receiptJwt}-${index}`}
+                        receipt={item}
+                        index={index}
+                        selected={index === selectedReceiptIndex}
+                        onSelect={() => {
+                          setSelectedReceiptIndex(index);
+                          setReceipt(item);
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <ReceiptCard
+                    receipt={receiptHistory[selectedReceiptIndex] ?? receipt}
+                    agentDid={identity?.agent.did}
+                    merchantDid={status?.merchantDid}
+                  />
+                  <LoraPanel
+                    txId={(getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.paymentTxId as string | undefined) ?? '—'}
+                    network={status?.offer.network ?? 'algorand:localnet'}
+                    simulation={getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.simulation === true}
+                  />
+                  <JsonPanel
+                    title="Selected receipt VC-JWT + verification"
+                    value={receiptHistory[selectedReceiptIndex] ?? receipt}
+                    emptyText="No receipt yet."
+                  />
+                </>
+              )}
             </div>
           ) : null}
 
@@ -661,6 +705,48 @@ function JsonPanel({
   );
 }
 
+function getReceiptSubject(receipt: ReceiptResponse | null): Record<string, unknown> | undefined {
+  return (
+    receipt?.verification.payload as
+      | { vc?: { credentialSubject?: Record<string, unknown> } }
+      | undefined
+  )?.vc?.credentialSubject;
+}
+
+function ReceiptListItem({
+  receipt,
+  index,
+  selected,
+  onSelect
+}: {
+  receipt: ReceiptResponse;
+  index: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const subject = getReceiptSubject(receipt);
+  const simulation = subject?.simulation === true;
+  const verified = receipt.verification.valid === true && !simulation;
+  const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'N/A';
+  const amount =
+    typeof subject?.amountMicroAlgos === 'number'
+      ? `${subject.amountMicroAlgos.toLocaleString()} µALGO`
+      : 'N/A';
+
+  return (
+    <button type="button" className={`receipt-list-item ${selected ? 'selected' : ''}`} onClick={onSelect}>
+      <span className="receipt-list-number">{index + 1}</span>
+      <span className="receipt-list-main">
+        <strong>{typeof subject?.description === 'string' ? subject.description : 'Payment receipt'}</strong>
+        <span>{amount} · {txId}</span>
+      </span>
+      <span className={`receipt-status ${verified ? 'receipt-status-verified' : 'receipt-status-simulated'}`}>
+        {verified ? 'Verified' : 'Simulation'}
+      </span>
+    </button>
+  );
+}
+
 function ReceiptCard({
   receipt,
   agentDid,
@@ -670,9 +756,7 @@ function ReceiptCard({
   agentDid?: string;
   merchantDid?: string;
 }) {
-  const subject = (
-    receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined
-  )?.vc?.credentialSubject;
+  const subject = getReceiptSubject(receipt);
   const proof =
     (subject?.proof as
       | {
@@ -688,6 +772,7 @@ function ReceiptCard({
       | undefined) ?? {};
 
   const simulation = subject?.simulation === true;
+  const verified = receipt?.verification.valid === true && !simulation;
   const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'N/A';
   const amountUsd =
     typeof subject?.amountUsd === 'number' ? `$${subject.amountUsd.toFixed(2)}` : 'N/A';
@@ -727,9 +812,11 @@ function ReceiptCard({
           <div className="receipt-eyebrow">Verifiable receipt</div>
           <div className="receipt-title">Market data access</div>
         </div>
-        <div className={`receipt-stamp ${simulation ? 'receipt-stamp-sim' : 'receipt-stamp-live'}`}>
-          {simulation ? 'Simulated' : 'Verified'}
-        </div>
+        {verified ? (
+          <div className="receipt-stamp receipt-stamp-live">Verified</div>
+        ) : (
+          <div className="receipt-stamp receipt-stamp-sim">Simulation</div>
+        )}
       </div>
       <div className="receipt-grid-full">
         {details.map((entry) => (
@@ -743,9 +830,9 @@ function ReceiptCard({
       </div>
       <div className="receipt-footer">
         <Check size={14} strokeWidth={3} />
-        {simulation
-          ? 'Signature valid — clearly labeled offline simulation'
-          : 'Signature valid — receipt was issued after algod verification'}
+        {verified
+          ? 'Verified VC signature and confirmed Algorand payment'
+          : 'VC signature valid — no on-chain verification claimed'}
       </div>
     </div>
   );
