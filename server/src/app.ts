@@ -8,18 +8,21 @@ import { merchantService } from './services/merchantService.js';
 
 const authorizationSchema = z.object({
   sessionId: z.string().uuid(),
-  dailyCapUsd: z.coerce.number().positive().default(50)
+  dailyCapUsd: z.coerce.number().positive().default(50),
+  resourceId: z.string().min(1).default('market-data-algo-usd')
 });
 
 const settlementSchema = z.object({
   sessionId: z.string().uuid(),
   authorizationJwt: z.string().min(1),
+  resourceId: z.string().min(1).default('market-data-algo-usd'),
   paymentTxId: z.string().min(1).optional()
 });
 
 const agentPaySchema = z.object({
   sessionId: z.string().uuid(),
-  authorizationJwt: z.string().min(1)
+  authorizationJwt: z.string().min(1),
+  resourceId: z.string().min(1).default('market-data-algo-usd')
 });
 
 const verifySchema = z.object({
@@ -36,16 +39,20 @@ app.use(
 app.use(express.json());
 
 app.get('/api/status', asyncRoute(async (_req, res) => {
-  res.json(await merchantService.getStatus());
+  res.json({
+    ...(await merchantService.getStatus()),
+    resources: merchantService.getOffers()
+  });
 }));
 
 // The "paid resource" from the agent-identity flow (step 0).
 // Returns an x402 payment challenge so callers can see the full protocol.
-app.get('/v1/market-data/ALGO-USD', asyncRoute(async (_req, res) => {
-  const offer = merchantService.getOffer();
+app.get(['/v1/market-data/ALGO-USD', '/v1/resources/:resourceId'], asyncRoute(async (req, res) => {
+  const resourceId = typeof req.params.resourceId === 'string' ? req.params.resourceId : undefined;
+  const offer = merchantService.getOffer(resourceId);
   res.status(402).json({
     error: 'payment_required',
-    message: 'This market-data endpoint requires a micro-payment per request.',
+    message: `This endpoint requires a micro-payment per request: ${offer.description}.`,
     note: 'Use the interactive demo to walk through the full flow: create an agent identity, get a spend-authorization VC, settle an Algorand payment, then receive a verifiable receipt.',
     x402: {
       x402Version: 1,
@@ -96,7 +103,7 @@ app.post('/api/identity/demo', asyncRoute(async (_req, res) => {
 app.post('/api/authorizations/issue', asyncRoute(async (req, res) => {
   const body = authorizationSchema.parse(req.body);
   const session = getSession(body.sessionId);
-  res.json(await merchantService.issueAuthorization(session, body.dailyCapUsd));
+  res.json(await merchantService.issueAuthorization(session, body.dailyCapUsd, body.resourceId));
 }));
 
 app.post('/api/merchant/access', asyncRoute(async (req, res) => {
@@ -104,17 +111,17 @@ app.post('/api/merchant/access', asyncRoute(async (req, res) => {
   const session = getSession(body.sessionId);
 
   if (!body.paymentTxId) {
-    res.status(402).json(await merchantService.createPaymentRequired(session, body.authorizationJwt));
+    res.status(402).json(await merchantService.createPaymentRequired(session, body.authorizationJwt, body.resourceId));
     return;
   }
 
-  res.json(await merchantService.settleLive(session, body.authorizationJwt, body.paymentTxId));
+  res.json(await merchantService.settleLive(session, body.authorizationJwt, body.paymentTxId, body.resourceId));
 }));
 
 app.post('/api/demo/simulate-receipt', asyncRoute(async (req, res) => {
   const body = settlementSchema.parse(req.body);
   const session = getSession(body.sessionId);
-  res.json(await merchantService.simulateSettlement(session, body.authorizationJwt));
+  res.json(await merchantService.simulateSettlement(session, body.authorizationJwt, body.resourceId));
 }));
 
 app.post('/api/credentials/verify', asyncRoute(async (req, res) => {
@@ -126,8 +133,9 @@ app.post('/api/credentials/verify', asyncRoute(async (req, res) => {
 
 app.get('/api/agent/balance', asyncRoute(async (req, res) => {
   const sessionId = z.string().uuid().parse(req.query['sessionId']);
+  const resourceId = z.string().min(1).default('market-data-algo-usd').parse(req.query['resourceId']);
   const session = getSession(sessionId);
-  res.json(await merchantService.getAgentBalance(session));
+  res.json(await merchantService.getAgentBalance(session, resourceId));
 }));
 
 app.post('/api/agent/fund', asyncRoute(async (req, res) => {
@@ -139,7 +147,7 @@ app.post('/api/agent/fund', asyncRoute(async (req, res) => {
 app.post('/api/agent/pay', asyncRoute(async (req, res) => {
   const body = agentPaySchema.parse(req.body);
   const session = getSession(body.sessionId);
-  res.json(await merchantService.submitAgentPayment(session, body.authorizationJwt));
+  res.json(await merchantService.submitAgentPayment(session, body.authorizationJwt, body.resourceId));
 }));
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

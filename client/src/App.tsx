@@ -14,6 +14,7 @@ type StatusResponse = {
   merchantDid: string;
   merchantPaymentAddress: string;
   offer: {
+    resourceId: string;
     path: string;
     description: string;
     requestAmountUsd: number;
@@ -21,6 +22,15 @@ type StatusResponse = {
     asset: string;
     network: string;
   };
+  resources: Array<{
+    resourceId: string;
+    path: string;
+    description: string;
+    requestAmountUsd: number;
+    amountMicroAlgos: number;
+    asset: string;
+    network: string;
+  }>;
   algod: {
     reachable: boolean;
     mode: string;
@@ -102,7 +112,7 @@ const STEPS = [
     label: 'Request',
     title: 'Agent requests a paid resource',
     icon: Bot,
-    body: 'Preview the paid ALGO/USD market-data request and inspect current algod availability.'
+    body: 'Choose a paid agent service, preview its x402 request, and inspect current algod availability.'
   },
   {
     label: 'Identity',
@@ -129,6 +139,8 @@ const STEPS = [
     body: 'Inspect the receipt VC-JWT, decoded claims, and verification result.'
   }
 ] as const;
+
+const RECEIPT_HISTORY_STORAGE_KEY = 'algorand-x402-receipt-history';
 
 /** Map the server's network string to a Lora segment. */
 function loraNetwork(network: string): string {
@@ -174,6 +186,9 @@ export default function App() {
   const [authorization, setAuthorization] = useState<AuthorizationResponse | null>(null);
   const [paywall, setPaywall] = useState<PaywallResponse | null>(null);
   const [receipt, setReceipt] = useState<ReceiptResponse | null>(null);
+  const [receiptHistory, setReceiptHistory] = useState<ReceiptResponse[]>(loadReceiptHistory);
+  const [selectedReceiptIndex, setSelectedReceiptIndex] = useState(0);
+  const [selectedResourceId, setSelectedResourceId] = useState('market-data-algo-usd');
   const [dailyCapUsd, setDailyCapUsd] = useState('50');
   const [paymentTxId, setPaymentTxId] = useState('');
   const [loading, setLoading] = useState<string | null>(null);
@@ -183,14 +198,25 @@ export default function App() {
     void refreshStatus();
   }, []);
 
+  useEffect(() => {
+    window.localStorage.setItem(RECEIPT_HISTORY_STORAGE_KEY, JSON.stringify(receiptHistory));
+  }, [receiptHistory]);
+
   const requestPreview = useMemo(() => {
     const did = identity?.agent.did ?? 'did:key:z...';
-    const path = status?.offer.path ?? '/v1/market-data/ALGO-USD';
+    const selectedResource = status?.resources?.find((resource) => resource.resourceId === selectedResourceId);
+    const path = selectedResource?.path ?? status?.offer.path ?? '/v1/market-data/ALGO-USD';
     return [`GET ${path}`, `Agent-DID: ${did}`, 'Accept: application/json'].join('\n');
-  }, [identity, status]);
+  }, [identity, selectedResourceId, status]);
 
   const step = STEPS[active];
   const Icon = step.icon;
+  const completed = [
+    Boolean(status?.resources?.some((resource) => resource.resourceId === selectedResourceId)),
+    Boolean(identity),
+    Boolean(authorization),
+    receiptHistory.length > 0
+  ][active];
 
   async function refreshStatus() {
     setError(null);
@@ -209,6 +235,7 @@ export default function App() {
       setAuthorization(null);
       setPaywall(null);
       setReceipt(null);
+      setSelectedReceiptIndex(0);
       setActive(2 > STEPS.length - 1 ? STEPS.length - 1 : 1);
       // fetch balance right away
       void fetchBalance(response.sessionId);
@@ -218,7 +245,7 @@ export default function App() {
   async function fetchBalance(sessionId: string) {
     try {
       const resp = await fetchJson<AgentBalanceResponse>(
-        `/api/agent/balance?sessionId=${encodeURIComponent(sessionId)}`
+        `/api/agent/balance?sessionId=${encodeURIComponent(sessionId)}&resourceId=${encodeURIComponent(selectedResourceId)}`
       );
       setBalance(resp);
     } catch {
@@ -248,7 +275,8 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
-          authorizationJwt: authorization.authorizationJwt
+          authorizationJwt: authorization.authorizationJwt,
+          resourceId: selectedResourceId
         })
       });
       setPaymentTxId(resp.txId);
@@ -265,10 +293,11 @@ export default function App() {
       body: JSON.stringify({
         sessionId: identity.sessionId,
         authorizationJwt: authorization.authorizationJwt,
-        paymentTxId: txId
+        paymentTxId: txId,
+        resourceId: selectedResourceId
       })
     });
-    setReceipt(response);
+    recordReceipt(response);
     setActive(4);
   }
 
@@ -283,12 +312,14 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
-          dailyCapUsd: Number(dailyCapUsd)
+          dailyCapUsd: Number(dailyCapUsd),
+          resourceId: selectedResourceId
         })
       });
       setAuthorization(response);
       setPaywall(null);
       setReceipt(null);
+      setSelectedReceiptIndex(0);
       setActive(3 > STEPS.length - 1 ? STEPS.length - 1 : 2);
     });
   }
@@ -304,7 +335,8 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
-          authorizationJwt: authorization.authorizationJwt
+          authorizationJwt: authorization.authorizationJwt,
+          resourceId: selectedResourceId
         }),
         allowStatuses: [402]
       });
@@ -324,10 +356,11 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
-          authorizationJwt: authorization.authorizationJwt
+          authorizationJwt: authorization.authorizationJwt,
+          resourceId: selectedResourceId
         })
       });
-      setReceipt(response);
+      recordReceipt(response);
       setActive(4);
     });
   }
@@ -345,12 +378,19 @@ export default function App() {
         body: JSON.stringify({
           sessionId: identity.sessionId,
           authorizationJwt: authorization.authorizationJwt,
-          paymentTxId: normalizedTxId
+          paymentTxId: normalizedTxId,
+          resourceId: selectedResourceId
         })
       });
-      setReceipt(response);
+      recordReceipt(response);
       setActive(4);
     });
+  }
+
+  function recordReceipt(nextReceipt: ReceiptResponse) {
+    setReceipt(nextReceipt);
+    setReceiptHistory((current) => [nextReceipt, ...current]);
+    setSelectedReceiptIndex(0);
   }
 
   return (
@@ -404,10 +444,30 @@ export default function App() {
 
           {active === 0 ? (
             <div className="detail-stack">
+              <label className="field">
+                <span>Choose a paid agent service</span>
+                <select
+                  value={selectedResourceId}
+                  onChange={(event) => {
+                    setSelectedResourceId(event.target.value);
+                    setAuthorization(null);
+                    setPaywall(null);
+                    setReceipt(null);
+                    setSelectedReceiptIndex(0);
+                  }}
+                >
+                  {(status?.resources ?? []).map((resource) => (
+                    <option key={resource.resourceId} value={resource.resourceId}>
+                      {resource.description} · ${resource.requestAmountUsd.toFixed(2)}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <CodeBlock value={requestPreview} />
               <div className="kv-card">
-                <KvRow label="Resource" value={status?.offer.description ?? 'Loading...'} />
-                <KvRow label="Quote" value={status ? `$${status.offer.requestAmountUsd.toFixed(2)} / ${status.offer.amountMicroAlgos} µALGO` : '—'} />
+                <KvRow label="Resource" value={status?.resources?.find((resource) => resource.resourceId === selectedResourceId)?.description ?? 'Loading...'} />
+                <KvRow label="Quote" value={status?.resources?.find((resource) => resource.resourceId === selectedResourceId) ? `$${status.resources.find((resource) => resource.resourceId === selectedResourceId)!.requestAmountUsd.toFixed(2)} / ${status.resources.find((resource) => resource.resourceId === selectedResourceId)!.amountMicroAlgos} µALGO` : '—'} />
+                <KvRow label="Endpoint" value={status?.resources?.find((resource) => resource.resourceId === selectedResourceId)?.path ?? '—'} />
                 <KvRow label="Network" value={status?.offer.network ?? 'algorand-localnet'} />
               </div>
               <div className="button-row">
@@ -525,7 +585,7 @@ export default function App() {
                       {balance ? `${balance.balanceAlgos.toFixed(6)} ALGO` : 'Loading…'}
                     </strong>
                   </div>
-                  {balance && balance.balanceMicroAlgos < balance.requiredMicroAlgos + 2000 ? (
+                  {balance && balance.balanceMicroAlgos < balance.requiredMicroAlgos ? (
                     <div className="warn-banner">
                       Agent needs funds — go back to Identity step and click Fund agent.
                     </div>
@@ -534,7 +594,7 @@ export default function App() {
                     type="button"
                     className="primary-button"
                     onClick={() => void sendAgentPayment()}
-                    disabled={!!loading || !balance || balance.balanceMicroAlgos < balance.requiredMicroAlgos + 2000}
+                    disabled={!!loading || !balance || balance.balanceMicroAlgos < balance.requiredMicroAlgos}
                   >
                     Send payment from agent &amp; verify <Zap size={14} />
                   </button>
@@ -594,20 +654,63 @@ export default function App() {
 
           {active === 4 ? (
             <div className="detail-stack">
-              <ReceiptCard
-                receipt={receipt}
-                agentDid={identity?.agent.did}
-                merchantDid={status?.merchantDid}
-              />
-              <LoraPanel
-                txId={(() => {
-                  const subject = (receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined)?.vc?.credentialSubject;
-                  return typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : '—';
-                })()}
-                network={status?.offer.network ?? 'algorand:localnet'}
-                simulation={receipt?.mode === 'offline-simulation'}
-              />
-              <JsonPanel title="Receipt + verification" value={receipt} emptyText="No receipt yet." />
+              {receiptHistory.length === 0 ? (
+                <div className="empty-receipts">
+                  No receipts yet. Complete a settlement to create the first receipt.
+                </div>
+              ) : (
+                <>
+                  <div className="receipt-list">
+                    <div className="receipt-list-heading">
+                      <div>
+                        <div className="json-title">Receipt history</div>
+                        <strong>{receiptHistory.length} receipt{receiptHistory.length === 1 ? '' : 's'}</strong>
+                      </div>
+                      <span className="badge badge-live">VC signatures checked</span>
+                    </div>
+                    {receiptHistory.map((item, index) => (
+                      <ReceiptListItem
+                        key={`${item.receiptJwt}-${index}`}
+                        receipt={item}
+                        index={index}
+                        selected={index === selectedReceiptIndex}
+                        onSelect={() => {
+                          setSelectedReceiptIndex(index);
+                          setReceipt(item);
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <ReceiptCard
+                    receipt={receiptHistory[selectedReceiptIndex] ?? receipt}
+                    agentDid={identity?.agent.did}
+                    merchantDid={status?.merchantDid}
+                  />
+                  <LoraPanel
+                    txId={(getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.paymentTxId as string | undefined) ?? '—'}
+                    network={status?.offer.network ?? 'algorand:localnet'}
+                    simulation={getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.simulation === true}
+                  />
+                  <JsonPanel
+                    title="Selected receipt VC-JWT + verification"
+                    value={receiptHistory[selectedReceiptIndex] ?? receipt}
+                    emptyText="No receipt yet."
+                  />
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {active < STEPS.length - 1 && completed ? (
+            <div className="next-step-row">
+              <button
+                type="button"
+                className="next-step-button"
+                onClick={() => setActive((current) => Math.min(current + 1, STEPS.length - 1))}
+                disabled={Boolean(loading)}
+              >
+                Next: {STEPS[active + 1].label} <ChevronRight size={16} />
+              </button>
             </div>
           ) : null}
 
@@ -661,6 +764,48 @@ function JsonPanel({
   );
 }
 
+function getReceiptSubject(receipt: ReceiptResponse | null): Record<string, unknown> | undefined {
+  return (
+    receipt?.verification.payload as
+      | { vc?: { credentialSubject?: Record<string, unknown> } }
+      | undefined
+  )?.vc?.credentialSubject;
+}
+
+function ReceiptListItem({
+  receipt,
+  index,
+  selected,
+  onSelect
+}: {
+  receipt: ReceiptResponse;
+  index: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const subject = getReceiptSubject(receipt);
+  const simulation = subject?.simulation === true;
+  const verified = receipt.verification.valid === true && !simulation;
+  const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'N/A';
+  const amount =
+    typeof subject?.amountMicroAlgos === 'number'
+      ? `${subject.amountMicroAlgos.toLocaleString()} µALGO`
+      : 'N/A';
+
+  return (
+    <button type="button" className={`receipt-list-item ${selected ? 'selected' : ''}`} onClick={onSelect}>
+      <span className="receipt-list-number">{index + 1}</span>
+      <span className="receipt-list-main">
+        <strong>{typeof subject?.description === 'string' ? subject.description : 'Payment receipt'}</strong>
+        <span>{amount} · {txId}</span>
+      </span>
+      <span className={`receipt-status ${verified ? 'receipt-status-verified' : 'receipt-status-simulated'}`}>
+        {verified ? 'Verified' : 'Simulation'}
+      </span>
+    </button>
+  );
+}
+
 function ReceiptCard({
   receipt,
   agentDid,
@@ -670,9 +815,7 @@ function ReceiptCard({
   agentDid?: string;
   merchantDid?: string;
 }) {
-  const subject = (
-    receipt?.verification.payload as { vc?: { credentialSubject?: Record<string, unknown> } } | undefined
-  )?.vc?.credentialSubject;
+  const subject = getReceiptSubject(receipt);
   const proof =
     (subject?.proof as
       | {
@@ -688,6 +831,7 @@ function ReceiptCard({
       | undefined) ?? {};
 
   const simulation = subject?.simulation === true;
+  const verified = receipt?.verification.valid === true && !simulation;
   const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'N/A';
   const amountUsd =
     typeof subject?.amountUsd === 'number' ? `$${subject.amountUsd.toFixed(2)}` : 'N/A';
@@ -725,11 +869,15 @@ function ReceiptCard({
       <div className="receipt-top">
         <div>
           <div className="receipt-eyebrow">Verifiable receipt</div>
-          <div className="receipt-title">Market data access</div>
+          <div className="receipt-title">
+            {typeof subject?.description === 'string' ? subject.description : 'Payment receipt'}
+          </div>
         </div>
-        <div className={`receipt-stamp ${simulation ? 'receipt-stamp-sim' : 'receipt-stamp-live'}`}>
-          {simulation ? 'Simulated' : 'Verified'}
-        </div>
+        {verified ? (
+          <div className="receipt-stamp receipt-stamp-live">Verified</div>
+        ) : (
+          <div className="receipt-stamp receipt-stamp-sim">Simulation</div>
+        )}
       </div>
       <div className="receipt-grid-full">
         {details.map((entry) => (
@@ -743,9 +891,9 @@ function ReceiptCard({
       </div>
       <div className="receipt-footer">
         <Check size={14} strokeWidth={3} />
-        {simulation
-          ? 'Signature valid — clearly labeled offline simulation'
-          : 'Signature valid — receipt was issued after algod verification'}
+        {verified
+          ? 'Verified VC signature and confirmed Algorand payment'
+          : 'VC signature valid — no on-chain verification claimed'}
       </div>
     </div>
   );
@@ -769,6 +917,35 @@ function shorten(value: string | undefined, width = 24) {
   }
 
   return `${value.slice(0, Math.floor(width / 2))}…${value.slice(-Math.floor(width / 2))}`;
+}
+
+function loadReceiptHistory(): ReceiptResponse[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  const stored = window.localStorage.getItem(RECEIPT_HISTORY_STORAGE_KEY);
+  if (!stored) {
+    return [];
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((item): item is ReceiptResponse => {
+      if (!item || typeof item !== 'object') {
+        return false;
+      }
+
+      const candidate = item as Partial<ReceiptResponse>;
+      return typeof candidate.receiptJwt === 'string' && Boolean(candidate.verification);
+    });
+  } catch {
+    return [];
+  }
 }
 
 async function fetchJson<T>(

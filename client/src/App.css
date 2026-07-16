@@ -217,6 +217,41 @@ input {
   flex-wrap: wrap;
 }
 
+.next-step-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #1e3a34;
+}
+
+.next-step-button {
+  border: 1px solid #53d6a7;
+  border-radius: 12px;
+  background: #16a476;
+  color: white;
+  padding: 12px 17px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-weight: 700;
+  box-shadow: 0 0 0 3px rgba(83, 214, 167, 0.12), 0 8px 24px rgba(15, 122, 91, 0.25);
+  transition: transform 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.next-step-button:hover {
+  background: #1cbb89;
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 4px rgba(83, 214, 167, 0.16), 0 10px 28px rgba(15, 122, 91, 0.32);
+}
+
+.next-step-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .primary-button,
 .secondary-button {
   border: 0;
@@ -251,6 +286,15 @@ input {
 }
 
 .field input {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid #1e3a34;
+  background: #08110f;
+  color: #eaf5f0;
+  padding: 11px 12px;
+}
+
+.field select {
   width: 100%;
   border-radius: 12px;
   border: 1px solid #1e3a34;
@@ -386,6 +430,99 @@ input {
   gap: 8px;
   color: #0f7a5b;
   font-size: 13px;
+}
+
+.receipt-list {
+  display: grid;
+  gap: 8px;
+}
+
+.receipt-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 2px 6px;
+}
+
+.receipt-list-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  border: 1px solid #1e3a34;
+  border-radius: 12px;
+  background: #0a1614;
+  color: #eaf5f0;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.receipt-list-item:hover,
+.receipt-list-item.selected {
+  border-color: #0f7a5b;
+  background: #123a31;
+}
+
+.receipt-list-number {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #1e3a34;
+  color: #7fe0be;
+  font-size: 12px;
+}
+
+.receipt-list-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+}
+
+.receipt-list-main strong,
+.receipt-list-main span {
+  overflow-wrap: anywhere;
+}
+
+.receipt-list-main strong {
+  font-size: 13px;
+}
+
+.receipt-list-main span {
+  color: #a9c6bc;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+}
+
+.receipt-status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 4px 7px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.receipt-status-verified {
+  background: rgba(15, 122, 91, 0.2);
+  color: #7fe0be;
+}
+
+.receipt-status-simulated {
+  background: rgba(164, 126, 25, 0.2);
+  color: #ffd98a;
+}
+
+.empty-receipts {
+  border: 1px dashed #1e3a34;
+  border-radius: 14px;
+  padding: 18px;
+  color: #a9c6bc;
+  text-align: center;
 }
 
 /* ── Lora Explorer ────────────────────────────────────────── */
