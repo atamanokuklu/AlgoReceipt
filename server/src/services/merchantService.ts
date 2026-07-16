@@ -62,6 +62,8 @@ export const DEMO_RESOURCES: DemoResource[] = [
   }
 ] ;
 const DEFAULT_RESOURCE = DEMO_RESOURCES[0];
+const MIN_ACCOUNT_BALANCE_MICRO_ALGOS = 100_000;
+const PAYMENT_FEE_BUFFER_MICRO_ALGOS = 2_000;
 
 export interface SpendAuthorizationClaims {
   controllerDid: string;
@@ -365,7 +367,10 @@ export class MerchantService {
       balanceMicroAlgos: microAlgos,
       balanceAlgos: microAlgos / 1_000_000,
       merchantAddress: this.treasuryAddress,
-      requiredMicroAlgos: resource.amountMicroAlgos
+      requiredMicroAlgos:
+        MIN_ACCOUNT_BALANCE_MICRO_ALGOS +
+        resource.amountMicroAlgos +
+        PAYMENT_FEE_BUFFER_MICRO_ALGOS
     };
   }
 
@@ -381,7 +386,7 @@ export class MerchantService {
     const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
       sender: dispenser.addr,
       receiver: session.agentAlgoAddress,
-      amount: 2_000_000, // 2 ALGO covers the fee and the 0.1 ALGO resource payment
+      amount: 5_000_000, // Keep the agent above Algorand's minimum balance after payment and fees.
       suggestedParams
     });
 
@@ -392,7 +397,7 @@ export class MerchantService {
     return {
       txId: txid,
       fundedAddress: session.agentAlgoAddress,
-      amountMicroAlgos: 2_000_000,
+      amountMicroAlgos: 5_000_000,
       loraUrl: `https://lora.algokit.io/localnet/transaction/${txid}`
     };
   }
@@ -407,6 +412,19 @@ export class MerchantService {
     await this.validateAuthorization(session, authorizationJwt, resourceId);
 
     const suggestedParams = await this.algod.getTransactionParams().do();
+    const accountInfo = await this.algod.accountInformation(session.agentAlgoAddress).do();
+    const balanceMicroAlgos = Number(accountInfo.amount ?? 0);
+    const requiredMicroAlgos =
+      MIN_ACCOUNT_BALANCE_MICRO_ALGOS +
+      resource.amountMicroAlgos +
+      Number(suggestedParams.fee ?? PAYMENT_FEE_BUFFER_MICRO_ALGOS);
+    if (balanceMicroAlgos < requiredMicroAlgos) {
+      throw new ApiError(
+        400,
+        `Agent balance is ${balanceMicroAlgos} µALGO, but at least ${requiredMicroAlgos} µALGO is required. Fund the agent on the Identity step.`
+      );
+    }
+
     const encoder = new TextEncoder();
 
     const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({

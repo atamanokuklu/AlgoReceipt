@@ -205,6 +205,12 @@ export default function App() {
 
   const step = STEPS[active];
   const Icon = step.icon;
+  const completed = [
+    Boolean(status?.resources?.some((resource) => resource.resourceId === selectedResourceId)),
+    Boolean(identity),
+    Boolean(authorization),
+    receiptHistory.length > 0
+  ][active];
 
   async function refreshStatus() {
     setError(null);
@@ -576,7 +582,7 @@ export default function App() {
                       {balance ? `${balance.balanceAlgos.toFixed(6)} ALGO` : 'Loading…'}
                     </strong>
                   </div>
-                  {balance && balance.balanceMicroAlgos < balance.requiredMicroAlgos + 2000 ? (
+                  {balance && balance.balanceMicroAlgos < balance.requiredMicroAlgos ? (
                     <div className="warn-banner">
                       Agent needs funds — go back to Identity step and click Fund agent.
                     </div>
@@ -585,7 +591,7 @@ export default function App() {
                     type="button"
                     className="primary-button"
                     onClick={() => void sendAgentPayment()}
-                    disabled={!!loading || !balance || balance.balanceMicroAlgos < balance.requiredMicroAlgos + 2000}
+                    disabled={!!loading || !balance || balance.balanceMicroAlgos < balance.requiredMicroAlgos}
                   >
                     Send payment from agent &amp; verify <Zap size={14} />
                   </button>
@@ -689,6 +695,19 @@ export default function App() {
                   />
                 </>
               )}
+            </div>
+          ) : null}
+
+          {active < STEPS.length - 1 && completed ? (
+            <div className="next-step-row">
+              <button
+                type="button"
+                className="next-step-button"
+                onClick={() => setActive((current) => Math.min(current + 1, STEPS.length - 1))}
+                disabled={Boolean(loading)}
+              >
+                Next: {STEPS[active + 1].label} <ChevronRight size={16} />
+              </button>
             </div>
           ) : null}
 
