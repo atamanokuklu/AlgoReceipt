@@ -14,6 +14,7 @@ type StatusResponse = {
   merchantDid: string;
   merchantPaymentAddress: string;
   offer: {
+    resourceId: string;
     path: string;
     description: string;
     requestAmountUsd: number;
@@ -21,6 +22,15 @@ type StatusResponse = {
     asset: string;
     network: string;
   };
+  resources: Array<{
+    resourceId: string;
+    path: string;
+    description: string;
+    requestAmountUsd: number;
+    amountMicroAlgos: number;
+    asset: string;
+    network: string;
+  }>;
   algod: {
     reachable: boolean;
     mode: string;
@@ -102,7 +112,7 @@ const STEPS = [
     label: 'Request',
     title: 'Agent requests a paid resource',
     icon: Bot,
-    body: 'Preview the paid ALGO/USD market-data request and inspect current algod availability.'
+    body: 'Choose a paid agent service, preview its x402 request, and inspect current algod availability.'
   },
   {
     label: 'Identity',
@@ -176,6 +186,7 @@ export default function App() {
   const [receipt, setReceipt] = useState<ReceiptResponse | null>(null);
   const [receiptHistory, setReceiptHistory] = useState<ReceiptResponse[]>([]);
   const [selectedReceiptIndex, setSelectedReceiptIndex] = useState(0);
+  const [selectedResourceId, setSelectedResourceId] = useState('market-data-algo-usd');
   const [dailyCapUsd, setDailyCapUsd] = useState('50');
   const [paymentTxId, setPaymentTxId] = useState('');
   const [loading, setLoading] = useState<string | null>(null);
@@ -187,9 +198,10 @@ export default function App() {
 
   const requestPreview = useMemo(() => {
     const did = identity?.agent.did ?? 'did:key:z...';
-    const path = status?.offer.path ?? '/v1/market-data/ALGO-USD';
+    const selectedResource = status?.resources?.find((resource) => resource.resourceId === selectedResourceId);
+    const path = selectedResource?.path ?? status?.offer.path ?? '/v1/market-data/ALGO-USD';
     return [`GET ${path}`, `Agent-DID: ${did}`, 'Accept: application/json'].join('\n');
-  }, [identity, status]);
+  }, [identity, selectedResourceId, status]);
 
   const step = STEPS[active];
   const Icon = step.icon;
@@ -213,8 +225,6 @@ export default function App() {
       setReceipt(null);
       setReceiptHistory([]);
       setSelectedReceiptIndex(0);
-      setReceiptHistory([]);
-      setSelectedReceiptIndex(0);
       setActive(2 > STEPS.length - 1 ? STEPS.length - 1 : 1);
       // fetch balance right away
       void fetchBalance(response.sessionId);
@@ -224,7 +234,7 @@ export default function App() {
   async function fetchBalance(sessionId: string) {
     try {
       const resp = await fetchJson<AgentBalanceResponse>(
-        `/api/agent/balance?sessionId=${encodeURIComponent(sessionId)}`
+        `/api/agent/balance?sessionId=${encodeURIComponent(sessionId)}&resourceId=${encodeURIComponent(selectedResourceId)}`
       );
       setBalance(resp);
     } catch {
@@ -254,7 +264,8 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
-          authorizationJwt: authorization.authorizationJwt
+          authorizationJwt: authorization.authorizationJwt,
+          resourceId: selectedResourceId
         })
       });
       setPaymentTxId(resp.txId);
@@ -271,7 +282,8 @@ export default function App() {
       body: JSON.stringify({
         sessionId: identity.sessionId,
         authorizationJwt: authorization.authorizationJwt,
-        paymentTxId: txId
+        paymentTxId: txId,
+        resourceId: selectedResourceId
       })
     });
     recordReceipt(response);
@@ -289,7 +301,8 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
-          dailyCapUsd: Number(dailyCapUsd)
+          dailyCapUsd: Number(dailyCapUsd),
+          resourceId: selectedResourceId
         })
       });
       setAuthorization(response);
@@ -312,7 +325,8 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
-          authorizationJwt: authorization.authorizationJwt
+          authorizationJwt: authorization.authorizationJwt,
+          resourceId: selectedResourceId
         }),
         allowStatuses: [402]
       });
@@ -332,7 +346,8 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           sessionId: identity.sessionId,
-          authorizationJwt: authorization.authorizationJwt
+          authorizationJwt: authorization.authorizationJwt,
+          resourceId: selectedResourceId
         })
       });
       recordReceipt(response);
@@ -353,7 +368,8 @@ export default function App() {
         body: JSON.stringify({
           sessionId: identity.sessionId,
           authorizationJwt: authorization.authorizationJwt,
-          paymentTxId: normalizedTxId
+          paymentTxId: normalizedTxId,
+          resourceId: selectedResourceId
         })
       });
       recordReceipt(response);
@@ -418,10 +434,31 @@ export default function App() {
 
           {active === 0 ? (
             <div className="detail-stack">
+              <label className="field">
+                <span>Choose a paid agent service</span>
+                <select
+                  value={selectedResourceId}
+                  onChange={(event) => {
+                    setSelectedResourceId(event.target.value);
+                    setAuthorization(null);
+                    setPaywall(null);
+                    setReceipt(null);
+                    setReceiptHistory([]);
+                    setSelectedReceiptIndex(0);
+                  }}
+                >
+                  {(status?.resources ?? []).map((resource) => (
+                    <option key={resource.resourceId} value={resource.resourceId}>
+                      {resource.description} · ${resource.requestAmountUsd.toFixed(2)}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <CodeBlock value={requestPreview} />
               <div className="kv-card">
-                <KvRow label="Resource" value={status?.offer.description ?? 'Loading...'} />
-                <KvRow label="Quote" value={status ? `$${status.offer.requestAmountUsd.toFixed(2)} / ${status.offer.amountMicroAlgos} µALGO` : '—'} />
+                <KvRow label="Resource" value={status?.resources?.find((resource) => resource.resourceId === selectedResourceId)?.description ?? 'Loading...'} />
+                <KvRow label="Quote" value={status?.resources?.find((resource) => resource.resourceId === selectedResourceId) ? `$${status.resources.find((resource) => resource.resourceId === selectedResourceId)!.requestAmountUsd.toFixed(2)} / ${status.resources.find((resource) => resource.resourceId === selectedResourceId)!.amountMicroAlgos} µALGO` : '—'} />
+                <KvRow label="Endpoint" value={status?.resources?.find((resource) => resource.resourceId === selectedResourceId)?.path ?? '—'} />
                 <KvRow label="Network" value={status?.offer.network ?? 'algorand-localnet'} />
               </div>
               <div className="button-row">

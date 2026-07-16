@@ -2,7 +2,8 @@
 
 Local demo of the ACK-ID + ACK-Pay idea:
 
-1. An agent gets a cryptographic `did:key` identity.
+1. An evaluator chooses a paid agent service.
+2. An agent gets a cryptographic `did:key` identity.
 2. A controller issues a W3C Verifiable Credential authorizing spend.
 3. The agent requests an x402-protected market-data resource.
 4. The agent pays on Algorand LocalNet.
@@ -37,7 +38,16 @@ The backend uses:
 
 ## Demo walkthrough
 
-Use the five steps in the UI:
+Use the five steps in the UI. The first step lets you choose among:
+
+- ALGO/USD market data
+- Amsterdam weather
+- English-to-French translation
+- Basic counterparty risk score
+
+Each use case has its own endpoint, description, and microAlgo price, and that selection is carried through the authorization, x402 challenge, payment note, and receipt.
+
+Then continue:
 
 1. **Request** — inspect the paid `ALGO/USD` resource and x402 quote.
 2. **Identity** — create an agent DID, controller DID, and Algorand account; fund the account from LocalNet.

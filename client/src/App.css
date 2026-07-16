@@ -259,6 +259,15 @@ input {
   padding: 11px 12px;
 }
 
+.field select {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid #1e3a34;
+  background: #08110f;
+  color: #eaf5f0;
+  padding: 11px 12px;
+}
+
 .sub-panel-header,
 .receipt-top {
   display: flex;

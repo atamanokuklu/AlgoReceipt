@@ -13,7 +13,18 @@ import {
   type VerifiedCredential
 } from './vc.js';
 
-const DEMO_RESOURCE = {
+export interface DemoResource {
+  resourceId: string;
+  path: string;
+  description: string;
+  requestAmountUsd: number;
+  amountMicroAlgos: number;
+  asset: string;
+  network: string;
+}
+
+export const DEMO_RESOURCES: DemoResource[] = [
+  {
   resourceId: 'market-data-algo-usd',
   path: '/v1/market-data/ALGO-USD',
   description: 'ALGO/USD paid market snapshot',
@@ -21,7 +32,36 @@ const DEMO_RESOURCE = {
   amountMicroAlgos: 100000,
   asset: 'ALGO',
   network: 'algorand:localnet'
-} as const;
+  },
+  {
+  resourceId: 'weather-amsterdam',
+  path: '/v1/weather/AMSTERDAM',
+  description: 'Real-time Amsterdam weather snapshot',
+  requestAmountUsd: 0.03,
+  amountMicroAlgos: 60000,
+  asset: 'ALGO',
+  network: 'algorand:localnet'
+  },
+  {
+  resourceId: 'translation-en-fr',
+  path: '/v1/translation/EN-FR',
+  description: 'Machine translation: English to French',
+  requestAmountUsd: 0.08,
+  amountMicroAlgos: 160000,
+  asset: 'ALGO',
+  network: 'algorand:localnet'
+  },
+  {
+  resourceId: 'risk-score-basic',
+  path: '/v1/risk-score/BASIC',
+  description: 'Basic counterparty risk score',
+  requestAmountUsd: 0.1,
+  amountMicroAlgos: 200000,
+  asset: 'ALGO',
+  network: 'algorand:localnet'
+  }
+] ;
+const DEFAULT_RESOURCE = DEMO_RESOURCES[0];
 
 export interface SpendAuthorizationClaims {
   controllerDid: string;
@@ -85,9 +125,26 @@ export class MerchantService {
     settings.ALGOD_PORT
   );
 
-  getOffer() {
+  getResource(resourceId = DEFAULT_RESOURCE.resourceId): DemoResource {
+    const resource = DEMO_RESOURCES.find((item) => item.resourceId === resourceId);
+    if (!resource) {
+      throw new ApiError(404, `Unknown demo resource: ${resourceId}`);
+    }
+    return resource;
+  }
+
+  getOffers() {
+    return DEMO_RESOURCES.map((resource) => ({
+      ...resource,
+      merchantDid: this.merchantIdentity.did,
+      merchantPaymentAddress: this.treasuryAddress
+    }));
+  }
+
+  getOffer(resourceId = DEFAULT_RESOURCE.resourceId) {
+    const resource = this.getResource(resourceId);
     return {
-      ...DEMO_RESOURCE,
+      ...resource,
       merchantDid: this.merchantIdentity.did,
       merchantPaymentAddress: this.treasuryAddress
     };
@@ -128,23 +185,24 @@ export class MerchantService {
     }
   }
 
-  async issueAuthorization(session: DemoSession, dailyCapUsd: number) {
+  async issueAuthorization(session: DemoSession, dailyCapUsd: number, resourceId = DEFAULT_RESOURCE.resourceId) {
+    const resource = this.getResource(resourceId);
     const usedTodayUsd = this.ledger.getUsedToday(session.agent.did);
-    this.ledger.assertCanSpend(session.agent.did, DEMO_RESOURCE.requestAmountUsd, dailyCapUsd);
+    this.ledger.assertCanSpend(session.agent.did, resource.requestAmountUsd, dailyCapUsd);
 
     const remainingDailyCapUsd = roundCurrency(dailyCapUsd - usedTodayUsd);
     const claims: SpendAuthorizationClaims = {
       controllerDid: session.controller.did,
       merchantDid: this.merchantIdentity.did,
       merchantPaymentAddress: this.treasuryAddress,
-      resourcePath: DEMO_RESOURCE.path,
-      description: DEMO_RESOURCE.description,
+      resourcePath: resource.path,
+      description: resource.description,
       dailyCapUsd: roundCurrency(dailyCapUsd),
-      requestAmountUsd: DEMO_RESOURCE.requestAmountUsd,
+      requestAmountUsd: resource.requestAmountUsd,
       usedTodayUsd,
       remainingDailyCapUsd,
       currency: 'USD',
-      network: DEMO_RESOURCE.network,
+      network: resource.network as `${string}:${string}`,
       validOn: todayString()
     };
 
@@ -162,42 +220,43 @@ export class MerchantService {
       verification,
       capStatus: {
         usedTodayUsd,
-        requestAmountUsd: DEMO_RESOURCE.requestAmountUsd,
+        requestAmountUsd: resource.requestAmountUsd,
         dailyCapUsd,
         remainingAfterRequestUsd: roundCurrency(
-          dailyCapUsd - usedTodayUsd - DEMO_RESOURCE.requestAmountUsd
+          dailyCapUsd - usedTodayUsd - resource.requestAmountUsd
         )
       }
     };
   }
 
-  async createPaymentRequired(session: DemoSession, authorizationJwt: string) {
-    const authorization = await this.validateAuthorization(session, authorizationJwt);
+  async createPaymentRequired(session: DemoSession, authorizationJwt: string, resourceId = DEFAULT_RESOURCE.resourceId) {
+    const authorization = await this.validateAuthorization(session, authorizationJwt, resourceId);
 
     return {
       error: 'payment_required',
       message: 'Submit a valid Algorand payment transaction id to unlock the resource.',
       requestId: randomUUID(),
       note: 'Send a confirmed Algorand payment of the required microAlgo amount to the merchant address, then POST back with paymentTxId set to the confirmed transaction id.',
-      x402: this.buildX402Offer(authorization)
+      x402: this.buildX402Offer(authorization, resourceId)
     };
   }
 
-  private buildX402Offer(authorization: ValidatedAuthorization): PaymentRequiredV1 {
+  private buildX402Offer(authorization: ValidatedAuthorization, resourceId = DEFAULT_RESOURCE.resourceId): PaymentRequiredV1 {
+    const resource = this.getResource(resourceId);
     return {
       x402Version: 1,
       accepts: [
         {
           scheme: 'exact',
-          network: DEMO_RESOURCE.network,
-          maxAmountRequired: String(DEMO_RESOURCE.amountMicroAlgos),
-          resource: DEMO_RESOURCE.path,
-          description: DEMO_RESOURCE.description,
+          network: resource.network as `${string}:${string}`,
+          maxAmountRequired: String(resource.amountMicroAlgos),
+          resource: resource.path,
+          description: resource.description,
           mimeType: 'application/json',
           outputSchema: {},
           payTo: this.treasuryAddress,
           maxTimeoutSeconds: 300,
-          asset: DEMO_RESOURCE.asset,
+          asset: resource.asset,
           extra: {
             paymentMethod: 'algorand-payment',
             receiptFormat: 'vc-jwt',
@@ -215,7 +274,8 @@ export class MerchantService {
     };
   }
 
-  async settleLive(session: DemoSession, authorizationJwt: string, paymentTxId: string) {
+  async settleLive(session: DemoSession, authorizationJwt: string, paymentTxId: string, resourceId = DEFAULT_RESOURCE.resourceId) {
+    const resource = this.getResource(resourceId);
     const status = await this.getStatus();
     if (!status.algod.reachable) {
       throw new ApiError(
@@ -225,7 +285,7 @@ export class MerchantService {
     }
 
     const normalizedTxId = paymentTxId.trim().toUpperCase();
-    const authorization = await this.validateAuthorization(session, authorizationJwt);
+    const authorization = await this.validateAuthorization(session, authorizationJwt, resourceId);
     const pendingTransaction = await this.awaitConfirmedTransaction(normalizedTxId);
     const proof = this.extractLivePaymentProof(normalizedTxId, pendingTransaction);
 
@@ -233,16 +293,16 @@ export class MerchantService {
       throw new ApiError(400, 'Transaction receiver does not match the merchant payment address.');
     }
 
-    if (proof.amountMicroAlgos < DEMO_RESOURCE.amountMicroAlgos) {
+    if (proof.amountMicroAlgos < resource.amountMicroAlgos) {
       throw new ApiError(
         400,
-        `Transaction amount ${proof.amountMicroAlgos} is below the required ${DEMO_RESOURCE.amountMicroAlgos} microAlgos.`
+        `Transaction amount ${proof.amountMicroAlgos} is below the required ${resource.amountMicroAlgos} microAlgos.`
       );
     }
 
     this.assertPaymentNotSettled(normalizedTxId);
-    const totalUsedUsd = this.ledger.recordSpend(session.agent.did, DEMO_RESOURCE.requestAmountUsd);
-    const receipt = await this.issueReceipt(session, authorization, {
+    const totalUsedUsd = this.ledger.recordSpend(session.agent.did, resource.requestAmountUsd);
+    const receipt = await this.issueReceipt(session, authorization, resource, {
       paymentTxId: normalizedTxId,
       settlementMode: 'live-algod-verified',
       simulation: false,
@@ -267,11 +327,12 @@ export class MerchantService {
     };
   }
 
-  async simulateSettlement(session: DemoSession, authorizationJwt: string) {
-    const authorization = await this.validateAuthorization(session, authorizationJwt);
+  async simulateSettlement(session: DemoSession, authorizationJwt: string, resourceId = DEFAULT_RESOURCE.resourceId) {
+    const resource = this.getResource(resourceId);
+    const authorization = await this.validateAuthorization(session, authorizationJwt, resourceId);
     const simulatedTxId = `SIM-${randomUUID()}`;
-    const totalUsedUsd = this.ledger.recordSpend(session.agent.did, DEMO_RESOURCE.requestAmountUsd);
-    const receipt = await this.issueReceipt(session, authorization, {
+    const totalUsedUsd = this.ledger.recordSpend(session.agent.did, resource.requestAmountUsd);
+    const receipt = await this.issueReceipt(session, authorization, resource, {
       paymentTxId: simulatedTxId,
       settlementMode: 'offline-simulation',
       simulation: true,
@@ -295,7 +356,8 @@ export class MerchantService {
 
   // ── Local agent funding & payment ─────────────────────────────────────
 
-  async getAgentBalance(session: DemoSession) {
+  async getAgentBalance(session: DemoSession, resourceId = DEFAULT_RESOURCE.resourceId) {
+    const resource = this.getResource(resourceId);
     const info = await this.algod.accountInformation(session.agentAlgoAddress).do();
     const microAlgos = Number(info.amount ?? 0);
     return {
@@ -303,7 +365,7 @@ export class MerchantService {
       balanceMicroAlgos: microAlgos,
       balanceAlgos: microAlgos / 1_000_000,
       merchantAddress: this.treasuryAddress,
-      requiredMicroAlgos: DEMO_RESOURCE.amountMicroAlgos
+      requiredMicroAlgos: resource.amountMicroAlgos
     };
   }
 
@@ -335,13 +397,14 @@ export class MerchantService {
     };
   }
 
-  async submitAgentPayment(session: DemoSession, authorizationJwt: string) {
+  async submitAgentPayment(session: DemoSession, authorizationJwt: string, resourceId = DEFAULT_RESOURCE.resourceId) {
+    const resource = this.getResource(resourceId);
     const status = await this.getStatus();
     if (!status.algod.reachable) {
       throw new ApiError(503, 'algod is unreachable — start AlgoKit LocalNet first.');
     }
 
-    await this.validateAuthorization(session, authorizationJwt);
+    await this.validateAuthorization(session, authorizationJwt, resourceId);
 
     const suggestedParams = await this.algod.getTransactionParams().do();
     const encoder = new TextEncoder();
@@ -349,8 +412,8 @@ export class MerchantService {
     const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
       sender: session.agentAlgoAddress,
       receiver: this.treasuryAddress,
-      amount: DEMO_RESOURCE.amountMicroAlgos,
-      note: encoder.encode(`x402:${DEMO_RESOURCE.path}`),
+      amount: resource.amountMicroAlgos,
+      note: encoder.encode(`x402:${resource.path}`),
       suggestedParams
     });
 
@@ -362,7 +425,7 @@ export class MerchantService {
       txId: txid,
       senderAddress: session.agentAlgoAddress,
       receiverAddress: this.treasuryAddress,
-      amountMicroAlgos: DEMO_RESOURCE.amountMicroAlgos,
+      amountMicroAlgos: resource.amountMicroAlgos,
       loraUrl: `https://lora.algokit.io/localnet/transaction/${txid}`
     };
   }
@@ -370,6 +433,7 @@ export class MerchantService {
   private async issueReceipt(
     session: DemoSession,
     authorization: ValidatedAuthorization,
+    resource: DemoResource,
     input: {
       paymentTxId: string;
       settlementMode: 'live-algod-verified' | 'offline-simulation';
@@ -381,12 +445,12 @@ export class MerchantService {
       controllerDid: session.controller.did,
       merchantDid: this.merchantIdentity.did,
       merchantPaymentAddress: this.treasuryAddress,
-      resourcePath: DEMO_RESOURCE.path,
-      description: DEMO_RESOURCE.description,
-      amountUsd: DEMO_RESOURCE.requestAmountUsd,
-      amountMicroAlgos: DEMO_RESOURCE.amountMicroAlgos,
-      asset: DEMO_RESOURCE.asset,
-      network: DEMO_RESOURCE.network,
+      resourcePath: resource.path,
+      description: resource.description,
+      amountUsd: resource.requestAmountUsd,
+      amountMicroAlgos: resource.amountMicroAlgos,
+      asset: resource.asset,
+      network: resource.network,
       paymentTxId: input.paymentTxId,
       settlementMode: input.settlementMode,
       simulation: input.simulation,
@@ -415,8 +479,10 @@ export class MerchantService {
 
   private async validateAuthorization(
     session: DemoSession,
-    authorizationJwt: string
+    authorizationJwt: string,
+    resourceId = DEFAULT_RESOURCE.resourceId
   ): Promise<ValidatedAuthorization> {
+    const resource = this.getResource(resourceId);
     const verification = await verifyCredentialJwt<SpendAuthorizationClaims>(authorizationJwt);
     const subject = verification.payload.sub;
     const issuer = verification.payload.iss;
@@ -442,11 +508,11 @@ export class MerchantService {
       throw new ApiError(400, 'Authorization merchant payment address does not match this merchant.');
     }
 
-    if (claims.resourcePath !== DEMO_RESOURCE.path) {
+    if (claims.resourcePath !== resource.path) {
       throw new ApiError(400, 'Authorization does not match the protected resource path.');
     }
 
-    if (claims.requestAmountUsd !== DEMO_RESOURCE.requestAmountUsd) {
+    if (claims.requestAmountUsd !== resource.requestAmountUsd) {
       throw new ApiError(400, 'Authorization amount does not match the protected resource price.');
     }
 
