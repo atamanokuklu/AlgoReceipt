@@ -140,6 +140,8 @@ const STEPS = [
   }
 ] as const;
 
+const RECEIPT_HISTORY_STORAGE_KEY = 'algorand-x402-receipt-history';
+
 /** Map the server's network string to a Lora segment. */
 function loraNetwork(network: string): string {
   if (network.includes('testnet')) return 'testnet';
@@ -184,7 +186,7 @@ export default function App() {
   const [authorization, setAuthorization] = useState<AuthorizationResponse | null>(null);
   const [paywall, setPaywall] = useState<PaywallResponse | null>(null);
   const [receipt, setReceipt] = useState<ReceiptResponse | null>(null);
-  const [receiptHistory, setReceiptHistory] = useState<ReceiptResponse[]>([]);
+  const [receiptHistory, setReceiptHistory] = useState<ReceiptResponse[]>(loadReceiptHistory);
   const [selectedReceiptIndex, setSelectedReceiptIndex] = useState(0);
   const [selectedResourceId, setSelectedResourceId] = useState('market-data-algo-usd');
   const [dailyCapUsd, setDailyCapUsd] = useState('50');
@@ -195,6 +197,10 @@ export default function App() {
   useEffect(() => {
     void refreshStatus();
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(RECEIPT_HISTORY_STORAGE_KEY, JSON.stringify(receiptHistory));
+  }, [receiptHistory]);
 
   const requestPreview = useMemo(() => {
     const did = identity?.agent.did ?? 'did:key:z...';
@@ -229,7 +235,6 @@ export default function App() {
       setAuthorization(null);
       setPaywall(null);
       setReceipt(null);
-      setReceiptHistory([]);
       setSelectedReceiptIndex(0);
       setActive(2 > STEPS.length - 1 ? STEPS.length - 1 : 1);
       // fetch balance right away
@@ -314,7 +319,6 @@ export default function App() {
       setAuthorization(response);
       setPaywall(null);
       setReceipt(null);
-      setReceiptHistory([]);
       setSelectedReceiptIndex(0);
       setActive(3 > STEPS.length - 1 ? STEPS.length - 1 : 2);
     });
@@ -449,7 +453,6 @@ export default function App() {
                     setAuthorization(null);
                     setPaywall(null);
                     setReceipt(null);
-                    setReceiptHistory([]);
                     setSelectedReceiptIndex(0);
                   }}
                 >
@@ -866,7 +869,9 @@ function ReceiptCard({
       <div className="receipt-top">
         <div>
           <div className="receipt-eyebrow">Verifiable receipt</div>
-          <div className="receipt-title">Market data access</div>
+          <div className="receipt-title">
+            {typeof subject?.description === 'string' ? subject.description : 'Payment receipt'}
+          </div>
         </div>
         {verified ? (
           <div className="receipt-stamp receipt-stamp-live">Verified</div>
@@ -912,6 +917,35 @@ function shorten(value: string | undefined, width = 24) {
   }
 
   return `${value.slice(0, Math.floor(width / 2))}…${value.slice(-Math.floor(width / 2))}`;
+}
+
+function loadReceiptHistory(): ReceiptResponse[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  const stored = window.localStorage.getItem(RECEIPT_HISTORY_STORAGE_KEY);
+  if (!stored) {
+    return [];
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((item): item is ReceiptResponse => {
+      if (!item || typeof item !== 'object') {
+        return false;
+      }
+
+      const candidate = item as Partial<ReceiptResponse>;
+      return typeof candidate.receiptJwt === 'string' && Boolean(candidate.verification);
+    });
+  } catch {
+    return [];
+  }
 }
 
 async function fetchJson<T>(
