@@ -141,7 +141,7 @@ const STEPS = [
   }
 ] as const;
 
-const RECEIPT_HISTORY_STORAGE_KEY = 'algorand-x402-verified-receipts-v2';
+const RECEIPT_HISTORY_STORAGE_KEY = 'algorand-x402-verified-receipts-v4';
 
 /** Map the server's network string to a Lora segment. */
 function loraNetwork(network: string): string {
@@ -216,7 +216,7 @@ export default function App() {
     Boolean(status?.resources?.some((resource) => resource.resourceId === selectedResourceId)),
     Boolean(identity),
     Boolean(authorization),
-    receiptHistory.length > 0
+    Boolean(receipt)
   ][active];
 
   async function refreshStatus() {
@@ -587,7 +587,7 @@ export default function App() {
                     onClick={() => void sendAgentPayment()}
                     disabled={!!loading || !balance || balance.balanceMicroAlgos < balance.requiredMicroAlgos}
                   >
-                    Send payment from agent &amp; verify <Zap size={14} />
+                    Send payment from agent <Zap size={14} />
                   </button>
                 </div>
               ) : null}
@@ -673,7 +673,7 @@ export default function App() {
                     ))}
                   </div>
                   <ReceiptCard
-                    receipt={receiptHistory[selectedReceiptIndex] ?? receipt}
+                    receipt={receipt ?? receiptHistory[selectedReceiptIndex]}
                     agentDid={identity?.agent.did}
                     merchantDid={status?.merchantDid}
                   />
@@ -681,19 +681,19 @@ export default function App() {
                     <button
                       type="button"
                       className="primary-button"
-                      onClick={() => downloadReceipt(receiptHistory[selectedReceiptIndex] ?? receipt)}
+                      onClick={() => downloadReceipt(receipt ?? receiptHistory[selectedReceiptIndex])}
                     >
                       Download selected receipt <Download size={14} />
                     </button>
                   </div>
                   <LoraPanel
-                    txId={(getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.paymentTxId as string | undefined) ?? '—'}
+                    txId={(getReceiptSubject(receipt ?? receiptHistory[selectedReceiptIndex])?.paymentTxId as string | undefined) ?? '—'}
                     network={status?.offer.network ?? 'algorand:localnet'}
-                    simulation={getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.simulation === true}
+                    simulation={getReceiptSubject(receipt ?? receiptHistory[selectedReceiptIndex])?.simulation === true}
                   />
                   <JsonPanel
                     title="Selected receipt VC-JWT + verification"
-                    value={receiptHistory[selectedReceiptIndex] ?? receipt}
+                    value={receipt ?? receiptHistory[selectedReceiptIndex]}
                     emptyText="No receipt yet."
                   />
                 </>
