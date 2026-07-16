@@ -3,6 +3,7 @@ import {
   Bot,
   Check,
   ChevronRight,
+  Download,
   ExternalLink,
   FileCheck2,
   Fingerprint,
@@ -140,7 +141,7 @@ const STEPS = [
   }
 ] as const;
 
-const RECEIPT_HISTORY_STORAGE_KEY = 'algorand-x402-receipt-history';
+const RECEIPT_HISTORY_STORAGE_KEY = 'algorand-x402-verified-receipts-v4';
 
 /** Map the server's network string to a Lora segment. */
 function loraNetwork(network: string): string {
@@ -215,7 +216,7 @@ export default function App() {
     Boolean(status?.resources?.some((resource) => resource.resourceId === selectedResourceId)),
     Boolean(identity),
     Boolean(authorization),
-    receiptHistory.length > 0
+    Boolean(receipt)
   ][active];
 
   async function refreshStatus() {
@@ -281,24 +282,9 @@ export default function App() {
       });
       setPaymentTxId(resp.txId);
       void fetchBalance(identity.sessionId);
-      // auto-proceed to verify
-      await runVerifyAfterPay(resp.txId);
+      // Keep the user on settlement so verification and receipt issuance are explicit.
+      setError(null);
     });
-  }
-
-  async function runVerifyAfterPay(txId: string) {
-    if (!identity || !authorization) return;
-    const response = await fetchJson<ReceiptResponse>('/api/merchant/access', {
-      method: 'POST',
-      body: JSON.stringify({
-        sessionId: identity.sessionId,
-        authorizationJwt: authorization.authorizationJwt,
-        paymentTxId: txId,
-        resourceId: selectedResourceId
-      })
-    });
-    recordReceipt(response);
-    setActive(4);
   }
 
   async function issueAuthorization() {
@@ -360,7 +346,7 @@ export default function App() {
           resourceId: selectedResourceId
         })
       });
-      recordReceipt(response);
+      setReceipt(response);
       setActive(4);
     });
   }
@@ -388,6 +374,11 @@ export default function App() {
   }
 
   function recordReceipt(nextReceipt: ReceiptResponse) {
+    if (!isLiveVerifiedReceipt(nextReceipt)) {
+      setError('Receipt was not accepted because live VC and algod verification did not both succeed.');
+      return;
+    }
+
     setReceipt(nextReceipt);
     setReceiptHistory((current) => [nextReceipt, ...current]);
     setSelectedReceiptIndex(0);
@@ -596,7 +587,7 @@ export default function App() {
                     onClick={() => void sendAgentPayment()}
                     disabled={!!loading || !balance || balance.balanceMicroAlgos < balance.requiredMicroAlgos}
                   >
-                    Send payment from agent &amp; verify <Zap size={14} />
+                    Send payment from agent <Zap size={14} />
                   </button>
                 </div>
               ) : null}
@@ -656,7 +647,7 @@ export default function App() {
             <div className="detail-stack">
               {receiptHistory.length === 0 ? (
                 <div className="empty-receipts">
-                  No receipts yet. Complete a settlement to create the first receipt.
+                  No live verified receipts yet. Complete and verify an on-chain settlement to create the first receipt.
                 </div>
               ) : (
                 <>
@@ -666,7 +657,7 @@ export default function App() {
                         <div className="json-title">Receipt history</div>
                         <strong>{receiptHistory.length} receipt{receiptHistory.length === 1 ? '' : 's'}</strong>
                       </div>
-                      <span className="badge badge-live">VC signatures checked</span>
+                      <span className="badge badge-live">Live VC + algod verified</span>
                     </div>
                     {receiptHistory.map((item, index) => (
                       <ReceiptListItem
@@ -682,18 +673,27 @@ export default function App() {
                     ))}
                   </div>
                   <ReceiptCard
-                    receipt={receiptHistory[selectedReceiptIndex] ?? receipt}
+                    receipt={receipt ?? receiptHistory[selectedReceiptIndex]}
                     agentDid={identity?.agent.did}
                     merchantDid={status?.merchantDid}
                   />
+                  <div className="button-row receipt-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => downloadReceipt(receipt ?? receiptHistory[selectedReceiptIndex])}
+                    >
+                      Download selected receipt <Download size={14} />
+                    </button>
+                  </div>
                   <LoraPanel
-                    txId={(getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.paymentTxId as string | undefined) ?? '—'}
+                    txId={(getReceiptSubject(receipt ?? receiptHistory[selectedReceiptIndex])?.paymentTxId as string | undefined) ?? '—'}
                     network={status?.offer.network ?? 'algorand:localnet'}
-                    simulation={getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.simulation === true}
+                    simulation={getReceiptSubject(receipt ?? receiptHistory[selectedReceiptIndex])?.simulation === true}
                   />
                   <JsonPanel
                     title="Selected receipt VC-JWT + verification"
-                    value={receiptHistory[selectedReceiptIndex] ?? receipt}
+                    value={receipt ?? receiptHistory[selectedReceiptIndex]}
                     emptyText="No receipt yet."
                   />
                 </>
@@ -770,6 +770,19 @@ function getReceiptSubject(receipt: ReceiptResponse | null): Record<string, unkn
       | { vc?: { credentialSubject?: Record<string, unknown> } }
       | undefined
   )?.vc?.credentialSubject;
+}
+
+function isLiveVerifiedReceipt(receipt: ReceiptResponse): boolean {
+  const subject = getReceiptSubject(receipt);
+  const proof = subject?.proof as { verifier?: unknown } | undefined;
+  return (
+    receipt.mode === 'live-algod-verified' &&
+    receipt.verification.valid === true &&
+    subject?.simulation === false &&
+    proof?.verifier === 'algod' &&
+    typeof subject?.paymentTxId === 'string' &&
+    !subject.paymentTxId.startsWith('SIM-')
+  );
 }
 
 function ReceiptListItem({
@@ -855,7 +868,8 @@ function ReceiptCard({
     { label: 'Network', value: network, code: true },
     { label: 'Transaction ID', value: txId, code: true },
     { label: 'Confirmed round', value: typeof proof.confirmedRound === 'number' ? String(proof.confirmedRound) : 'N/A' },
-    { label: 'Round time', value: formatUnix(proof.roundTime) },
+    { label: 'Verified at (Berlin)', value: formatIsoBerlin(typeof subject?.verifiedAt === 'string' ? subject.verifiedAt : undefined) },
+    { label: 'On-chain round time (LocalNet)', value: formatUnix(proof.roundTime) },
     { label: 'Sender address', value: proof.senderAddress ?? 'N/A', code: true },
     { label: 'Receiver address', value: proof.receiverAddress ?? 'N/A', code: true },
     { label: 'Fee (µALGO)', value: typeof proof.feeMicroAlgos === 'number' ? String(proof.feeMicroAlgos) : 'N/A' },
@@ -904,7 +918,43 @@ function formatUnix(value: number | undefined): string {
     return 'N/A';
   }
 
-  return new Date(value * 1000).toISOString();
+  return new Intl.DateTimeFormat('de-DE', {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+    timeZone: 'Europe/Berlin'
+  }).format(new Date(value * 1000));
+}
+
+function formatIsoBerlin(value: string | undefined): string {
+  if (!value) {
+    return 'N/A';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'N/A';
+  }
+
+  return new Intl.DateTimeFormat('de-DE', {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+    timeZone: 'Europe/Berlin'
+  }).format(date);
+}
+function downloadReceipt(receipt: ReceiptResponse | null) {
+  if (!receipt) {
+    return;
+  }
+
+  const subject = getReceiptSubject(receipt);
+  const filename = `algorand-receipt-${typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'selected'}.json`;
+  const blob = new Blob([JSON.stringify(receipt, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function shorten(value: string | undefined, width = 24) {
@@ -941,7 +991,11 @@ function loadReceiptHistory(): ReceiptResponse[] {
       }
 
       const candidate = item as Partial<ReceiptResponse>;
-      return typeof candidate.receiptJwt === 'string' && Boolean(candidate.verification);
+      return (
+        typeof candidate.receiptJwt === 'string' &&
+        Boolean(candidate.verification) &&
+        isLiveVerifiedReceipt(candidate as ReceiptResponse)
+      );
     });
   } catch {
     return [];

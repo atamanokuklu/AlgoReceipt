@@ -64,6 +64,7 @@ export const DEMO_RESOURCES: DemoResource[] = [
 const DEFAULT_RESOURCE = DEMO_RESOURCES[0];
 const MIN_ACCOUNT_BALANCE_MICRO_ALGOS = 100_000;
 const PAYMENT_FEE_BUFFER_MICRO_ALGOS = 2_000;
+const MERCHANT_INITIAL_BALANCE_MICRO_ALGOS = 1_000_000;
 
 export interface SpendAuthorizationClaims {
   controllerDid: string;
@@ -93,6 +94,7 @@ export interface ReceiptClaims {
   paymentTxId: string;
   settlementMode: 'live-algod-verified' | 'offline-simulation';
   simulation: boolean;
+  verifiedAt: string;
   proof: {
     confirmedRound?: number;
     roundTime?: number;
@@ -121,6 +123,7 @@ export class MerchantService {
   private readonly treasuryAddress = algosdk.generateAccount().addr.toString();
   private readonly ledger = new SpendLedger();
   private readonly settledPaymentTxIds = new Set<string>();
+  private treasuryFunded = false;
   private readonly algod = new algosdk.Algodv2(
     settings.ALGOD_TOKEN,
     settings.ALGOD_SERVER,
@@ -233,6 +236,10 @@ export class MerchantService {
 
   async createPaymentRequired(session: DemoSession, authorizationJwt: string, resourceId = DEFAULT_RESOURCE.resourceId) {
     const authorization = await this.validateAuthorization(session, authorizationJwt, resourceId);
+    const status = await this.getStatus();
+    if (status.algod.reachable) {
+      await this.ensureTreasuryFunding();
+    }
 
     return {
       error: 'payment_required',
@@ -410,6 +417,7 @@ export class MerchantService {
     }
 
     await this.validateAuthorization(session, authorizationJwt, resourceId);
+    await this.ensureTreasuryFunding();
 
     const suggestedParams = await this.algod.getTransactionParams().do();
     const accountInfo = await this.algod.accountInformation(session.agentAlgoAddress).do();
@@ -448,6 +456,24 @@ export class MerchantService {
     };
   }
 
+  private async ensureTreasuryFunding() {
+    if (this.treasuryFunded) {
+      return;
+    }
+
+    const dispenser = await getDispenserAccount();
+    const suggestedParams = await this.algod.getTransactionParams().do();
+    const fundingTransaction = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+      sender: dispenser.addr,
+      receiver: this.treasuryAddress,
+      amount: MERCHANT_INITIAL_BALANCE_MICRO_ALGOS,
+      suggestedParams
+    });
+    const signedTransaction = fundingTransaction.signTxn(dispenser.sk);
+    const { txid } = await this.algod.sendRawTransaction(signedTransaction).do();
+    await algosdk.waitForConfirmation(this.algod, txid, 5);
+    this.treasuryFunded = true;
+  }
   private async issueReceipt(
     session: DemoSession,
     authorization: ValidatedAuthorization,
@@ -472,6 +498,7 @@ export class MerchantService {
       paymentTxId: input.paymentTxId,
       settlementMode: input.settlementMode,
       simulation: input.simulation,
+      verifiedAt: new Date().toISOString(),
       proof: input.proof
     };
 
