@@ -3,6 +3,7 @@ import {
   Bot,
   Check,
   ChevronRight,
+  Download,
   ExternalLink,
   FileCheck2,
   Fingerprint,
@@ -281,24 +282,9 @@ export default function App() {
       });
       setPaymentTxId(resp.txId);
       void fetchBalance(identity.sessionId);
-      // auto-proceed to verify
-      await runVerifyAfterPay(resp.txId);
+      // Keep the user on settlement so verification and receipt issuance are explicit.
+      setError(null);
     });
-  }
-
-  async function runVerifyAfterPay(txId: string) {
-    if (!identity || !authorization) return;
-    const response = await fetchJson<ReceiptResponse>('/api/merchant/access', {
-      method: 'POST',
-      body: JSON.stringify({
-        sessionId: identity.sessionId,
-        authorizationJwt: authorization.authorizationJwt,
-        paymentTxId: txId,
-        resourceId: selectedResourceId
-      })
-    });
-    recordReceipt(response);
-    setActive(4);
   }
 
   async function issueAuthorization() {
@@ -686,6 +672,15 @@ export default function App() {
                     agentDid={identity?.agent.did}
                     merchantDid={status?.merchantDid}
                   />
+                  <div className="button-row receipt-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => downloadReceipt(receiptHistory[selectedReceiptIndex] ?? receipt)}
+                    >
+                      Download selected receipt <Download size={14} />
+                    </button>
+                  </div>
                   <LoraPanel
                     txId={(getReceiptSubject(receiptHistory[selectedReceiptIndex] ?? receipt)?.paymentTxId as string | undefined) ?? '—'}
                     network={status?.offer.network ?? 'algorand:localnet'}
@@ -855,7 +850,7 @@ function ReceiptCard({
     { label: 'Network', value: network, code: true },
     { label: 'Transaction ID', value: txId, code: true },
     { label: 'Confirmed round', value: typeof proof.confirmedRound === 'number' ? String(proof.confirmedRound) : 'N/A' },
-    { label: 'Round time', value: formatUnix(proof.roundTime) },
+    { label: 'Round time (Berlin)', value: formatUnix(proof.roundTime) },
     { label: 'Sender address', value: proof.senderAddress ?? 'N/A', code: true },
     { label: 'Receiver address', value: proof.receiverAddress ?? 'N/A', code: true },
     { label: 'Fee (µALGO)', value: typeof proof.feeMicroAlgos === 'number' ? String(proof.feeMicroAlgos) : 'N/A' },
@@ -904,7 +899,27 @@ function formatUnix(value: number | undefined): string {
     return 'N/A';
   }
 
-  return new Date(value * 1000).toISOString();
+  return new Intl.DateTimeFormat('de-DE', {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+    timeZone: 'Europe/Berlin'
+  }).format(new Date(value * 1000));
+}
+
+function downloadReceipt(receipt: ReceiptResponse | null) {
+  if (!receipt) {
+    return;
+  }
+
+  const subject = getReceiptSubject(receipt);
+  const filename = `algorand-receipt-${typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'selected'}.json`;
+  const blob = new Blob([JSON.stringify(receipt, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function shorten(value: string | undefined, width = 24) {

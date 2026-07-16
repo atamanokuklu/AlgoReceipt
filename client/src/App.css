@@ -217,6 +217,10 @@ input {
   flex-wrap: wrap;
 }
 
+.receipt-actions {
+  justify-content: flex-end;
+}
+
 .next-step-row {
   display: flex;
   justify-content: flex-end;
