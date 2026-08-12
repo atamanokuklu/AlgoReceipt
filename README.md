@@ -30,11 +30,50 @@ The backend uses:
 | --- | --- |
 | React/Vite | `http://localhost:5173` |
 | Express API | `http://localhost:3001` |
-| algod LocalNet | `http://localhost:4001` |
-| KMD LocalNet | `http://localhost:4002` |
-| Lora | `https://lora.algokit.io/localnet` |
+| algod LocalNet | `http://localhost:4001` (TestNet: `https://testnet-api.algonode.cloud`) |
+| KMD LocalNet | `http://localhost:4002` (not used on TestNet) |
+| Lora | `https://lora.algokit.io/localnet` (TestNet: `https://lora.algokit.io/testnet`) |
 
 `server\.env.example` contains the LocalNet defaults. The LocalNet KMD wallet funds demo agents from the genesis account.
+
+## Run on Algorand TestNet (real transactions, finals demo)
+
+For the hackathon finals you can point the same app at public Algorand TestNet so payments are
+real, on-chain, and verifiable by judges on Lora TestNet — no LocalNet/Docker required.
+
+1. **Generate persistent accounts** (one for the merchant treasury, one for the demo agent):
+   ```powershell
+   cmd /c "npm run gen:testnet-account -w server"
+   ```
+   Run it twice and note each printed address + 25-word mnemonic. Persistent accounts mean you
+   only have to fund them once — restarting the server won't roll a new address.
+
+2. **Fund both addresses with real TestNet ALGO.** You said you already have ALGO/USDT — TestNet
+   ALGO is separate "play money" and must come from a TestNet faucet or an existing TestNet
+   wallet, not your MainNet balances:
+   - Official dispenser: https://bank.testnet.algorand.network/ (paste the address, request ALGO).
+   - Or send TestNet ALGO from your own Pera/Defly wallet if you already hold TestNet funds there.
+   - The merchant treasury needs ~1 ALGO; the agent needs enough to cover the resource price plus
+     Algorand's 0.1 ALGO minimum balance and fees (a few ALGO is plenty for the whole demo).
+   - Note on USDT/USDC: Algorand TestNet does not have an official "USDT" ASA. If you want to pay
+     with a stablecoin instead of ALGO, the closest real equivalent is TestNet USDC
+     (asset ID `10458941`) — opting in and paying with an ASA is not wired into the payment flow
+     yet (see Scope below), so today's demo settles in ALGO on both LocalNet and TestNet.
+
+3. **Configure the server** — edit `server/.env`:
+   ```ini
+   ALGO_NETWORK=testnet
+   MERCHANT_MNEMONIC=<merchant mnemonic from step 1>
+   AGENT_MNEMONIC=<agent mnemonic from step 1>
+   ```
+   Leave `ALGOD_SERVER` / `ALGOD_PORT` / `ALGOD_TOKEN` unset — they default to AlgoNode's free
+   public TestNet API (`https://testnet-api.algonode.cloud`, no token needed).
+
+4. **Restart the server** (`npm run dev`). The status banner switches to "Algorand TestNet", the
+   Identity step shows the funded agent address with a manual-funding panel (instead of the
+   LocalNet dispenser button) if it still needs ALGO, and every settled payment links to
+   `https://lora.algokit.io/testnet/transaction/<txid>` — a real, judge-verifiable TestNet
+   transaction.
 
 ## Demo walkthrough
 
@@ -75,4 +114,4 @@ cmd /c "npm run test"
 
 ## Scope
 
-Sessions and the spend ledger are in memory for demonstration. `did:key` is used for local portability; production deployments would add durable key custody, revocation/status checks, stronger replay protection, and a wallet/ARC-58 adapter.
+Sessions and the spend ledger are in memory for demonstration. `did:key` is used for local portability; production deployments would add durable key custody, revocation/status checks, stronger replay protection, and a wallet/ARC-58 adapter. Payments settle in ALGO on both LocalNet and TestNet; ASA/stablecoin settlement (e.g. TestNet USDC) is not yet wired into the payment flow.
