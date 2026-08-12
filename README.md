@@ -36,10 +36,10 @@ The backend uses:
 
 `server\.env.example` contains the LocalNet defaults. The LocalNet KMD wallet funds demo agents from the genesis account.
 
-## Run on Algorand TestNet (real transactions, finals demo)
+## Run on Algorand TestNet (real transactions)
 
-For the hackathon finals you can point the same app at public Algorand TestNet so payments are
-real, on-chain, and verifiable by judges on Lora TestNet — no LocalNet/Docker required.
+The same app can also point at public Algorand TestNet so payments are real, on-chain, and
+independently verifiable on Lora TestNet — no LocalNet/Docker required.
 
 1. **Generate persistent accounts** (one for the merchant treasury, one for the demo agent):
    ```powershell
@@ -48,9 +48,9 @@ real, on-chain, and verifiable by judges on Lora TestNet — no LocalNet/Docker 
    Run it twice and note each printed address + 25-word mnemonic. Persistent accounts mean you
    only have to fund them once — restarting the server won't roll a new address.
 
-2. **Fund both addresses with real TestNet ALGO.** You said you already have ALGO/USDT — TestNet
-   ALGO is separate "play money" and must come from a TestNet faucet or an existing TestNet
-   wallet, not your MainNet balances:
+2. **Fund both addresses with real TestNet ALGO.** TestNet ALGO is separate "play money" that
+   must come from a TestNet faucet or an existing TestNet wallet — it is not the same as MainNet
+   ALGO or any MainNet token balance:
    - Official dispenser: https://bank.testnet.algorand.network/ (paste the address, request ALGO).
    - Or send TestNet ALGO from your own Pera/Defly wallet if you already hold TestNet funds there.
    - The merchant treasury needs ~1 ALGO; the agent needs enough to cover the resource price plus
@@ -72,7 +72,7 @@ real, on-chain, and verifiable by judges on Lora TestNet — no LocalNet/Docker 
 4. **Restart the server** (`npm run dev`). The status banner switches to "Algorand TestNet", the
    Identity step shows the funded agent address with a manual-funding panel (instead of the
    LocalNet dispenser button) if it still needs ALGO, and every settled payment links to
-   `https://lora.algokit.io/testnet/transaction/<txid>` — a real, judge-verifiable TestNet
+   `https://lora.algokit.io/testnet/transaction/<txid>` — a real, independently verifiable TestNet
    transaction.
 
 ## Demo walkthrough
