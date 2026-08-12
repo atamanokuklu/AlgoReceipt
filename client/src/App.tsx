@@ -14,6 +14,7 @@ import {
 type StatusResponse = {
   merchantDid: string;
   merchantPaymentAddress: string;
+  network: 'localnet' | 'testnet';
   offer: {
     resourceId: string;
     path: string;
@@ -58,12 +59,21 @@ type AgentBalanceResponse = {
   requiredMicroAlgos: number;
 };
 
-type AgentFundResponse = {
-  txId: string;
-  fundedAddress: string;
-  amountMicroAlgos: number;
-  loraUrl: string;
-};
+type AgentFundResponse =
+  | {
+      manual: false;
+      txId: string;
+      fundedAddress: string;
+      amountMicroAlgos: number;
+      loraUrl: string;
+    }
+  | {
+      manual: true;
+      network: string;
+      fundedAddress: string;
+      faucetUrl: string;
+      message: string;
+    };
 
 type AgentPayResponse = {
   txId: string;
@@ -397,6 +407,9 @@ export default function App() {
         </div>
 
         <div className="status-banner">
+          <span className={`badge ${status?.network === 'testnet' ? 'badge-testnet' : 'badge-muted'}`}>
+            {status?.network === 'testnet' ? 'Algorand TestNet' : 'Algorand LocalNet'}
+          </span>
           <span className={`badge ${status?.algod.reachable ? 'badge-live' : 'badge-offline'}`}>
             {status?.algod.reachable ? 'algod reachable' : 'offline simulation mode'}
           </span>
@@ -494,29 +507,60 @@ export default function App() {
                   </div>
 
                   {status?.algod.reachable ? (
-                    <div className="button-row">
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => void fundAgent()}
-                        disabled={!!loading}
-                      >
-                        Fund agent (2 ALGO from genesis) <ChevronRight size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        title="Refresh balance"
-                        onClick={() => void fetchBalance(identity.sessionId)}
-                      >
-                        ↻
-                      </button>
-                    </div>
+                    status.network === 'testnet' ? (
+                      <div className="testnet-fund-panel">
+                        <p className="lora-note">
+                          TestNet has no auto-dispenser here — send real TestNet ALGO to the address above from
+                          the official faucet or your own wallet (Pera/Defly), then refresh the balance.
+                        </p>
+                        <div className="button-row">
+                          <a
+                            className="secondary-button"
+                            href="https://bank.testnet.algorand.network/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Open TestNet dispenser <ExternalLink size={13} />
+                          </a>
+                          <button
+                            type="button"
+                            className="icon-button"
+                            title="Refresh balance"
+                            onClick={() => void fetchBalance(identity.sessionId)}
+                          >
+                            ↻
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="button-row">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => void fundAgent()}
+                          disabled={!!loading}
+                        >
+                          Fund agent (5 ALGO from genesis) <ChevronRight size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title="Refresh balance"
+                          onClick={() => void fetchBalance(identity.sessionId)}
+                        >
+                          ↻
+                        </button>
+                      </div>
+                    )
                   ) : (
-                    <span className="lora-note">Start AlgoKit LocalNet to fund the agent on-chain.</span>
+                    <span className="lora-note">
+                      {status?.network === 'testnet'
+                        ? 'Waiting for the public TestNet algod node to become reachable.'
+                        : 'Start AlgoKit LocalNet to fund the agent on-chain.'}
+                    </span>
                   )}
 
-                  {fundResult ? (
+                  {fundResult && !fundResult.manual ? (
                     <div className="fund-result">
                       <Check size={13} strokeWidth={3} />
                       Funded · tx {shorten(fundResult.txId, 20)}
@@ -524,6 +568,9 @@ export default function App() {
                         Lora <ExternalLink size={11} />
                       </a>
                     </div>
+                  ) : null}
+                  {fundResult && fundResult.manual ? (
+                    <div className="fund-result fund-result-manual">{fundResult.message}</div>
                   ) : null}
                 </div>
               ) : null}

@@ -347,6 +347,11 @@ input {
   color: #a9c6bc;
 }
 
+.badge-testnet {
+  background: rgba(90, 110, 220, 0.22);
+  color: #b6c0ff;
+}
+
 .json-panel {
   overflow: hidden;
 }
@@ -591,6 +596,19 @@ input {
   border-radius: 10px;
   padding: 8px 12px;
 }
+
+.fund-result-manual {
+  display: block;
+  color: #b6c0ff;
+  background: rgba(90, 110, 220, 0.12);
+}
+
+.testnet-fund-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 
 /* ── Automated live payment panel ────────────────────────── */
 

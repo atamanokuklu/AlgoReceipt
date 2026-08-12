@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { PaymentRequiredV1 } from '@x402/core/types';
 import algosdk from 'algosdk';
-import { algodBaseUrl, settings } from '../config.js';
+import { algodBaseUrl, buildLoraTxUrl, isTestnet, settings } from '../config.js';
 import { ApiError } from '../errors.js';
 import { type DemoSession } from './demoSessions.js';
 import { createDidKeyIdentity, type DemoIdentity } from './didKey.js';
@@ -12,6 +12,9 @@ import {
   verifyCredentialJwt,
   type VerifiedCredential
 } from './vc.js';
+
+/** CAIP-2-style network id used in x402 offers and receipts. Mirrors ALGO_NETWORK. */
+const NETWORK_CAIP = `algorand:${settings.ALGO_NETWORK}`;
 
 export interface DemoResource {
   resourceId: string;
@@ -31,7 +34,7 @@ export const DEMO_RESOURCES: DemoResource[] = [
   requestAmountUsd: 0.05,
   amountMicroAlgos: 100000,
   asset: 'ALGO',
-  network: 'algorand:localnet'
+  network: NETWORK_CAIP
   },
   {
   resourceId: 'weather-amsterdam',
@@ -40,7 +43,7 @@ export const DEMO_RESOURCES: DemoResource[] = [
   requestAmountUsd: 0.03,
   amountMicroAlgos: 60000,
   asset: 'ALGO',
-  network: 'algorand:localnet'
+  network: NETWORK_CAIP
   },
   {
   resourceId: 'translation-en-fr',
@@ -49,7 +52,7 @@ export const DEMO_RESOURCES: DemoResource[] = [
   requestAmountUsd: 0.08,
   amountMicroAlgos: 160000,
   asset: 'ALGO',
-  network: 'algorand:localnet'
+  network: NETWORK_CAIP
   },
   {
   resourceId: 'risk-score-basic',
@@ -58,7 +61,7 @@ export const DEMO_RESOURCES: DemoResource[] = [
   requestAmountUsd: 0.1,
   amountMicroAlgos: 200000,
   asset: 'ALGO',
-  network: 'algorand:localnet'
+  network: NETWORK_CAIP
   }
 ] ;
 const DEFAULT_RESOURCE = DEMO_RESOURCES[0];
@@ -120,7 +123,7 @@ export interface PaymentProof {
 
 export class MerchantService {
   private readonly merchantIdentity: DemoIdentity = createDidKeyIdentity();
-  private readonly treasuryAddress = algosdk.generateAccount().addr.toString();
+  private readonly treasuryAddress: string;
   private readonly ledger = new SpendLedger();
   private readonly settledPaymentTxIds = new Set<string>();
   private treasuryFunded = false;
@@ -129,6 +132,17 @@ export class MerchantService {
     settings.ALGOD_SERVER,
     settings.ALGOD_PORT
   );
+
+  constructor() {
+    // On TestNet, reuse a persistent merchant address (set MERCHANT_MNEMONIC in .env) so the
+    // treasury doesn't reset on every restart and Lora history stays coherent. LocalNet keeps
+    // the original ephemeral-per-restart behavior since KMD funds it automatically anyway.
+    this.treasuryAddress =
+      isTestnet && settings.MERCHANT_MNEMONIC
+        ? algosdk.mnemonicToSecretKey(settings.MERCHANT_MNEMONIC.trim()).addr.toString()
+        : algosdk.generateAccount().addr.toString();
+  }
+
 
   getResource(resourceId = DEFAULT_RESOURCE.resourceId): DemoResource {
     const resource = DEMO_RESOURCES.find((item) => item.resourceId === resourceId);
@@ -166,6 +180,7 @@ export class MerchantService {
         merchantDid: this.merchantIdentity.did,
         merchantPaymentAddress: this.treasuryAddress,
         offer: this.getOffer(),
+        network: settings.ALGO_NETWORK,
         algod: {
           reachable: true,
           mode: 'live',
@@ -179,6 +194,7 @@ export class MerchantService {
         merchantDid: this.merchantIdentity.did,
         merchantPaymentAddress: this.treasuryAddress,
         offer: this.getOffer(),
+        network: settings.ALGO_NETWORK,
         algod: {
           reachable: false,
           mode: 'offline',
@@ -384,7 +400,23 @@ export class MerchantService {
   async fundAgent(session: DemoSession) {
     const status = await this.getStatus();
     if (!status.algod.reachable) {
-      throw new ApiError(503, 'algod is unreachable — start AlgoKit LocalNet first.');
+      throw new ApiError(
+        503,
+        isTestnet
+          ? 'algod is unreachable — check your internet connection to the public TestNet node.'
+          : 'algod is unreachable — start AlgoKit LocalNet first.'
+      );
+    }
+
+    if (isTestnet) {
+      // TestNet has no KMD dispenser: funding must come from the user's own ALGO/faucet.
+      return {
+        manual: true as const,
+        network: settings.ALGO_NETWORK,
+        fundedAddress: session.agentAlgoAddress,
+        faucetUrl: settings.TESTNET_FAUCET_URL,
+        message: `Send TestNet ALGO to ${session.agentAlgoAddress} using the official dispenser or your own TestNet wallet, then refresh the balance.`
+      };
     }
 
     const dispenser = await getDispenserAccount();
@@ -402,10 +434,11 @@ export class MerchantService {
     await algosdk.waitForConfirmation(this.algod, txid, 5);
 
     return {
+      manual: false as const,
       txId: txid,
       fundedAddress: session.agentAlgoAddress,
       amountMicroAlgos: 5_000_000,
-      loraUrl: `https://lora.algokit.io/localnet/transaction/${txid}`
+      loraUrl: buildLoraTxUrl(txid)
     };
   }
 
@@ -413,7 +446,12 @@ export class MerchantService {
     const resource = this.getResource(resourceId);
     const status = await this.getStatus();
     if (!status.algod.reachable) {
-      throw new ApiError(503, 'algod is unreachable — start AlgoKit LocalNet first.');
+      throw new ApiError(
+        503,
+        isTestnet
+          ? 'algod is unreachable — check your internet connection to the public TestNet node.'
+          : 'algod is unreachable — start AlgoKit LocalNet first.'
+      );
     }
 
     await this.validateAuthorization(session, authorizationJwt, resourceId);
@@ -452,12 +490,27 @@ export class MerchantService {
       senderAddress: session.agentAlgoAddress,
       receiverAddress: this.treasuryAddress,
       amountMicroAlgos: resource.amountMicroAlgos,
-      loraUrl: `https://lora.algokit.io/localnet/transaction/${txid}`
+      loraUrl: buildLoraTxUrl(txid)
     };
   }
 
   private async ensureTreasuryFunding() {
     if (this.treasuryFunded) {
+      return;
+    }
+
+    if (isTestnet) {
+      // No KMD dispenser on TestNet — verify the persistent merchant address already has
+      // enough balance instead of trying to auto-fund it.
+      const info = await this.algod.accountInformation(this.treasuryAddress).do();
+      const balanceMicroAlgos = Number(info.amount ?? 0);
+      if (balanceMicroAlgos < MIN_ACCOUNT_BALANCE_MICRO_ALGOS) {
+        throw new ApiError(
+          400,
+          `Merchant treasury ${this.treasuryAddress} has ${balanceMicroAlgos} µALGO, but needs at least ${MIN_ACCOUNT_BALANCE_MICRO_ALGOS} µALGO on TestNet. Fund it via ${settings.TESTNET_FAUCET_URL} or send TestNet ALGO from your own wallet.`
+        );
+      }
+      this.treasuryFunded = true;
       return;
     }
 
