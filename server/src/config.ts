@@ -1,7 +1,14 @@
 import { z } from 'zod';
 
+// dotenv sets keys with blank values (e.g. `ALGOD_SERVER=`) to an empty string rather than
+// leaving them unset, which would otherwise silently override our per-network defaults below
+// with ''. Treat blank env vars as "not set" so `z.string().default(...)` actually kicks in.
+const rawEnv = Object.fromEntries(
+  Object.entries(process.env).map(([key, value]) => [key, value === '' ? undefined : value])
+);
+
 const REQUESTED_NETWORK =
-  (process.env.ALGO_NETWORK ?? 'localnet').trim().toLowerCase() === 'testnet' ? 'testnet' : 'localnet';
+  (rawEnv.ALGO_NETWORK ?? 'localnet').trim().toLowerCase() === 'testnet' ? 'testnet' : 'localnet';
 
 const LOCALNET_GENESIS_TOKEN = 'a'.repeat(64);
 
@@ -38,7 +45,7 @@ const envSchema = z.object({
   TESTNET_FAUCET_URL: z.string().default('https://bank.testnet.algorand.network/')
 });
 
-export const settings = envSchema.parse(process.env);
+export const settings = envSchema.parse(rawEnv);
 
 export const isTestnet = settings.ALGO_NETWORK === 'testnet';
 

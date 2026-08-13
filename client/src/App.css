@@ -221,6 +221,55 @@ input {
   justify-content: flex-end;
 }
 
+.download-menu {
+  position: relative;
+}
+
+.download-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+  background: #0d221d;
+  border: 1px solid #1e3a34;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  min-width: 260px;
+}
+
+.download-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #eaf5f0;
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.download-menu-item:hover {
+  background: #123a31;
+}
+
+.download-menu-item span:first-of-type {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.download-menu-item strong {
+  font-size: 13px;
+}
+
+.download-menu-item span span {
+  font-size: 11px;
+  color: #a9c6bc;
+}
+
 .next-step-row {
   display: flex;
   justify-content: flex-end;

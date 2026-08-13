@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Check,
+  ChevronDown,
   ChevronRight,
   Download,
   ExternalLink,
   FileCheck2,
+  FileJson,
+  FileText,
   Fingerprint,
   ShieldCheck,
   Zap
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 
 type StatusResponse = {
   merchantDid: string;
@@ -725,13 +729,7 @@ export default function App() {
                     merchantDid={status?.merchantDid}
                   />
                   <div className="button-row receipt-actions">
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={() => downloadReceipt(receipt ?? receiptHistory[selectedReceiptIndex])}
-                    >
-                      Download selected receipt <Download size={14} />
-                    </button>
+                    <DownloadReceiptMenu receipt={receipt ?? receiptHistory[selectedReceiptIndex]} />
                   </div>
                   <LoraPanel
                     txId={(getReceiptSubject(receipt ?? receiptHistory[selectedReceiptIndex])?.paymentTxId as string | undefined) ?? '—'}
@@ -866,15 +864,13 @@ function ReceiptListItem({
   );
 }
 
-function ReceiptCard({
-  receipt,
-  agentDid,
-  merchantDid
-}: {
-  receipt: ReceiptResponse | null;
-  agentDid?: string;
-  merchantDid?: string;
-}) {
+type ReceiptDetail = { label: string; value: string; code?: boolean };
+
+function buildReceiptDetails(
+  receipt: ReceiptResponse | null,
+  agentDid?: string,
+  merchantDid?: string
+): ReceiptDetail[] {
   const subject = getReceiptSubject(receipt);
   const proof =
     (subject?.proof as
@@ -890,8 +886,6 @@ function ReceiptCard({
         }
       | undefined) ?? {};
 
-  const simulation = subject?.simulation === true;
-  const verified = receipt?.verification.valid === true && !simulation;
   const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'N/A';
   const amountUsd =
     typeof subject?.amountUsd === 'number' ? `$${subject.amountUsd.toFixed(2)}` : 'N/A';
@@ -901,7 +895,7 @@ function ReceiptCard({
       : 'N/A';
   const network = typeof subject?.network === 'string' ? subject.network : 'N/A';
 
-  const details: Array<{ label: string; value: string; code?: boolean }> = [
+  return [
     { label: 'Agent DID', value: typeof subject?.id === 'string' ? subject.id : agentDid ?? 'N/A', code: true },
     { label: 'Controller DID', value: typeof subject?.controllerDid === 'string' ? subject.controllerDid : 'N/A', code: true },
     { label: 'Merchant DID', value: typeof subject?.merchantDid === 'string' ? subject.merchantDid : merchantDid ?? 'N/A', code: true },
@@ -924,6 +918,21 @@ function ReceiptCard({
     { label: 'Verifier', value: proof.verifier ?? 'N/A' },
     { label: 'Verifier message', value: proof.message ?? 'N/A' }
   ];
+}
+
+function ReceiptCard({
+  receipt,
+  agentDid,
+  merchantDid
+}: {
+  receipt: ReceiptResponse | null;
+  agentDid?: string;
+  merchantDid?: string;
+}) {
+  const subject = getReceiptSubject(receipt);
+  const simulation = subject?.simulation === true;
+  const verified = receipt?.verification.valid === true && !simulation;
+  const details = buildReceiptDetails(receipt, agentDid, merchantDid);
 
   return (
     <div className="receipt-card">
@@ -988,7 +997,69 @@ function formatIsoBerlin(value: string | undefined): string {
     timeZone: 'Europe/Berlin'
   }).format(date);
 }
-function downloadReceipt(receipt: ReceiptResponse | null) {
+function DownloadReceiptMenu({ receipt }: { receipt: ReceiptResponse | null }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  return (
+    <div className="download-menu" ref={menuRef}>
+      <button
+        type="button"
+        className="primary-button"
+        onClick={() => setOpen((value) => !value)}
+        disabled={!receipt}
+      >
+        Download selected receipt <Download size={14} />
+        <ChevronDown size={14} />
+      </button>
+      {open ? (
+        <div className="download-menu-list">
+          <button
+            type="button"
+            className="download-menu-item"
+            onClick={() => {
+              downloadReceiptJson(receipt);
+              setOpen(false);
+            }}
+          >
+            <FileJson size={14} />
+            <span>
+              <strong>JSON data</strong>
+              <span>Raw receipt VC-JWT + verification payload</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="download-menu-item"
+            onClick={() => {
+              downloadReceiptPdf(receipt);
+              setOpen(false);
+            }}
+          >
+            <FileText size={14} />
+            <span>
+              <strong>PDF document</strong>
+              <span>Human-readable receipt for records/sharing</span>
+            </span>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function downloadReceiptJson(receipt: ReceiptResponse | null) {
   if (!receipt) {
     return;
   }
@@ -1002,6 +1073,92 @@ function downloadReceipt(receipt: ReceiptResponse | null) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadReceiptPdf(receipt: ReceiptResponse | null) {
+  if (!receipt) {
+    return;
+  }
+
+  const subject = getReceiptSubject(receipt);
+  const simulation = subject?.simulation === true;
+  const verified = receipt.verification.valid === true && !simulation;
+  const details = buildReceiptDetails(receipt);
+  const title = typeof subject?.description === 'string' ? subject.description : 'Payment receipt';
+
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const marginX = 48;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  let y = 56;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(90, 90, 90);
+  doc.text('ALGORAND X402 · VERIFIABLE PAYMENT RECEIPT', marginX, y);
+  y += 26;
+
+  doc.setFontSize(18);
+  doc.setTextColor(20, 20, 20);
+  doc.text(title, marginX, y);
+  y += 22;
+
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  if (verified) {
+    doc.setTextColor(15, 122, 91);
+    doc.text('✓ VERIFIED — VC signature and on-chain payment confirmed by algod', marginX, y);
+  } else {
+    doc.setTextColor(164, 126, 25);
+    doc.text('⚠ SIMULATION — VC signature valid, no on-chain settlement claimed', marginX, y);
+  }
+  y += 24;
+
+  doc.setDrawColor(210, 210, 210);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 20;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+
+  const labelWidth = 170;
+  const valueWidth = pageWidth - marginX * 2 - labelWidth;
+
+  for (const detail of details) {
+    const valueLines = doc.splitTextToSize(detail.value || 'N/A', valueWidth);
+    const rowHeight = Math.max(14, valueLines.length * 12) + 8;
+
+    if (y + rowHeight > pageHeight - 48) {
+      doc.addPage();
+      y = 56;
+    }
+
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'bold');
+    doc.text(detail.label, marginX, y);
+
+    doc.setTextColor(30, 30, 30);
+    doc.setFont(detail.code ? 'courier' : 'helvetica', 'normal');
+    doc.text(valueLines, marginX + labelWidth, y);
+
+    y += rowHeight;
+  }
+
+  y += 8;
+  if (y > pageHeight - 60) {
+    doc.addPage();
+    y = 56;
+  }
+  doc.setDrawColor(210, 210, 210);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 20;
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(9);
+  doc.setTextColor(140, 140, 140);
+  doc.text('Generated by the Algorand agent identity + x402 payment receipt demo.', marginX, y);
+
+  const txId = typeof subject?.paymentTxId === 'string' ? subject.paymentTxId : 'selected';
+  doc.save(`algorand-receipt-${txId}.pdf`);
 }
 
 function shorten(value: string | undefined, width = 24) {
