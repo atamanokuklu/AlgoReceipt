@@ -1105,14 +1105,17 @@ function downloadReceiptPdf(receipt: ReceiptResponse | null) {
 
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
+  const statusText = verified
+    ? '[VERIFIED] VC signature and on-chain payment confirmed by algod'
+    : '[SIMULATION] VC signature valid, no on-chain settlement claimed';
+  const statusLines = doc.splitTextToSize(statusText, pageWidth - marginX * 2);
   if (verified) {
     doc.setTextColor(15, 122, 91);
-    doc.text('✓ VERIFIED — VC signature and on-chain payment confirmed by algod', marginX, y);
   } else {
     doc.setTextColor(164, 126, 25);
-    doc.text('⚠ SIMULATION — VC signature valid, no on-chain settlement claimed', marginX, y);
   }
-  y += 24;
+  doc.text(statusLines, marginX, y);
+  y += Math.max(1, statusLines.length) * 13 + 11;
 
   doc.setDrawColor(210, 210, 210);
   doc.line(marginX, y, pageWidth - marginX, y);
